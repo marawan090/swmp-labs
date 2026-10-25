@@ -12,7 +12,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote_plus
 import httpx
 from pydantic import BaseModel, Field
@@ -461,6 +461,8 @@ class Paper(BaseModel):
     title: str
     authors: List[str] = Field(default_factory=list)
     institutions: List[str] = Field(default_factory=list)
+    country: Optional[str] = None  # Primary canonical country (e.g. "Canada", "United States")
+    countries: List[str] = Field(default_factory=list)  # All affiliated countries / regions
     year: Optional[int] = None
     abstract: str = ""
     tldr: Optional[str] = None
@@ -476,6 +478,504 @@ class Paper(BaseModel):
     corresponding_author: Optional[str] = None
     author_details: List[Dict[str, Any]] = Field(default_factory=list)
 
+
+
+# Comprehensive mapping of country names, aliases, and ISO 3166-1 alpha-2 codes
+COUNTRY_REGISTRY: Dict[str, Tuple[str, str]] = {
+    "canada": ("CA", "Canada"),
+    "ca": ("CA", "Canada"),
+    "united states": ("US", "United States"),
+    "united states of america": ("US", "United States"),
+    "usa": ("US", "United States"),
+    "us": ("US", "United States"),
+    "u.s.": ("US", "United States"),
+    "u.s.a.": ("US", "United States"),
+    "united kingdom": ("GB", "United Kingdom"),
+    "uk": ("GB", "United Kingdom"),
+    "u.k.": ("GB", "United Kingdom"),
+    "great britain": ("GB", "United Kingdom"),
+    "britain": ("GB", "United Kingdom"),
+    "england": ("GB", "United Kingdom"),
+    "scotland": ("GB", "United Kingdom"),
+    "wales": ("GB", "United Kingdom"),
+    "gb": ("GB", "United Kingdom"),
+    "germany": ("DE", "Germany"),
+    "deutschland": ("DE", "Germany"),
+    "de": ("DE", "Germany"),
+    "france": ("FR", "France"),
+    "fr": ("FR", "France"),
+    "japan": ("JP", "Japan"),
+    "jp": ("JP", "Japan"),
+    "china": ("CN", "China"),
+    "prc": ("CN", "China"),
+    "cn": ("CN", "China"),
+    "australia": ("AU", "Australia"),
+    "au": ("AU", "Australia"),
+    "india": ("IN", "India"),
+    "in": ("IN", "India"),
+    "italy": ("IT", "Italy"),
+    "it": ("IT", "Italy"),
+    "spain": ("ES", "Spain"),
+    "es": ("ES", "Spain"),
+    "switzerland": ("CH", "Switzerland"),
+    "ch": ("CH", "Switzerland"),
+    "netherlands": ("NL", "Netherlands"),
+    "holland": ("NL", "Netherlands"),
+    "nl": ("NL", "Netherlands"),
+    "sweden": ("SE", "Sweden"),
+    "se": ("SE", "Sweden"),
+    "singapore": ("SG", "Singapore"),
+    "sg": ("SG", "Singapore"),
+    "south korea": ("KR", "South Korea"),
+    "korea": ("KR", "South Korea"),
+    "kr": ("KR", "South Korea"),
+    "brazil": ("BR", "Brazil"),
+    "brasil": ("BR", "Brazil"),
+    "br": ("BR", "Brazil"),
+    "egypt": ("EG", "Egypt"),
+    "eg": ("EG", "Egypt"),
+    "israel": ("IL", "Israel"),
+    "il": ("IL", "Israel"),
+    "ireland": ("IE", "Ireland"),
+    "ie": ("IE", "Ireland"),
+    "norway": ("NO", "Norway"),
+    "no": ("NO", "Norway"),
+    "denmark": ("DK", "Denmark"),
+    "dk": ("DK", "Denmark"),
+    "finland": ("FI", "Finland"),
+    "fi": ("FI", "Finland"),
+    "belgium": ("BE", "Belgium"),
+    "be": ("BE", "Belgium"),
+    "austria": ("AT", "Austria"),
+    "at": ("AT", "Austria"),
+    "poland": ("PL", "Poland"),
+    "pl": ("PL", "Poland"),
+    "taiwan": ("TW", "Taiwan"),
+    "tw": ("TW", "Taiwan"),
+    "mexico": ("MX", "Mexico"),
+    "mx": ("MX", "Mexico"),
+    "argentina": ("AR", "Argentina"),
+    "ar": ("AR", "Argentina"),
+    "chile": ("CL", "Chile"),
+    "cl": ("CL", "Chile"),
+    "new zealand": ("NZ", "New Zealand"),
+    "nz": ("NZ", "New Zealand"),
+    "south africa": ("ZA", "South Africa"),
+    "za": ("ZA", "South Africa"),
+    "saudi arabia": ("SA", "Saudi Arabia"),
+    "sa": ("SA", "Saudi Arabia"),
+    "united arab emirates": ("AE", "United Arab Emirates"),
+    "uae": ("AE", "United Arab Emirates"),
+    "ae": ("AE", "United Arab Emirates"),
+    "turkey": ("TR", "Turkey"),
+    "türkiye": ("TR", "Turkey"),
+    "tr": ("TR", "Turkey"),
+    "greece": ("GR", "Greece"),
+    "gr": ("GR", "Greece"),
+    "portugal": ("PT", "Portugal"),
+    "pt": ("PT", "Portugal"),
+    "czech republic": ("CZ", "Czech Republic"),
+    "czechia": ("CZ", "Czech Republic"),
+    "cz": ("CZ", "Czech Republic"),
+    "hungary": ("HU", "Hungary"),
+    "hu": ("HU", "Hungary"),
+    "romania": ("RO", "Romania"),
+    "ro": ("RO", "Romania"),
+    "russia": ("RU", "Russia"),
+    "ru": ("RU", "Russia"),
+    "ukraine": ("UA", "Ukraine"),
+    "ua": ("UA", "Ukraine"),
+    "pakistan": ("PK", "Pakistan"),
+    "pk": ("PK", "Pakistan"),
+    "bangladesh": ("BD", "Bangladesh"),
+    "bd": ("BD", "Bangladesh"),
+    "indonesia": ("ID", "Indonesia"),
+    "id": ("ID", "Indonesia"),
+    "malaysia": ("MY", "Malaysia"),
+    "my": ("MY", "Malaysia"),
+    "thailand": ("TH", "Thailand"),
+    "th": ("TH", "Thailand"),
+    "vietnam": ("VN", "Vietnam"),
+    "vn": ("VN", "Vietnam"),
+    "philippines": ("PH", "Philippines"),
+    "ph": ("PH", "Philippines"),
+    "colombia": ("CO", "Colombia"),
+    "co": ("CO", "Colombia"),
+    "nigeria": ("NG", "Nigeria"),
+    "ng": ("NG", "Nigeria"),
+    "kenya": ("KE", "Kenya"),
+    "ke": ("KE", "Kenya"),
+    "morocco": ("MA", "Morocco"),
+    "ma": ("MA", "Morocco"),
+}
+
+
+# Known canonical institution IDs (OpenAlex entity resolution)
+KNOWN_INSTITUTIONS: Dict[str, Tuple[str, str]] = {
+    "mit": ("I63966007", "Massachusetts Institute of Technology"),
+    "massachusetts institute of technology": ("I63966007", "Massachusetts Institute of Technology"),
+    "stanford": ("I97018004", "Stanford University"),
+    "stanford university": ("I97018004", "Stanford University"),
+    "harvard": ("I136199984", "Harvard University"),
+    "harvard university": ("I136199984", "Harvard University"),
+    "berkeley": ("I95457486", "University of California, Berkeley"),
+    "uc berkeley": ("I95457486", "University of California, Berkeley"),
+    "university of california, berkeley": ("I95457486", "University of California, Berkeley"),
+    "university of california berkeley": ("I95457486", "University of California, Berkeley"),
+    "oxford": ("I40120149", "University of Oxford"),
+    "university of oxford": ("I40120149", "University of Oxford"),
+    "cambridge": ("I241749", "University of Cambridge"),
+    "university of cambridge": ("I241749", "University of Cambridge"),
+    "carnegie mellon": ("I74973187", "Carnegie Mellon University"),
+    "carnegie mellon university": ("I74973187", "Carnegie Mellon University"),
+    "cmu": ("I74973187", "Carnegie Mellon University"),
+    "princeton": ("I20089843", "Princeton University"),
+    "princeton university": ("I20089843", "Princeton University"),
+    "waterloo": ("I157725225", "University of Waterloo"),
+    "university of waterloo": ("I157725225", "University of Waterloo"),
+    "uwaterloo": ("I157725225", "University of Waterloo"),
+    "toronto": ("I185261750", "University of Toronto"),
+    "university of toronto": ("I185261750", "University of Toronto"),
+    "uoft": ("I185261750", "University of Toronto"),
+    "utoronto": ("I185261750", "University of Toronto"),
+    "mcgill": ("I5023651", "McGill University"),
+    "mcgill university": ("I5023651", "McGill University"),
+    "ubc": ("I141945490", "University of British Columbia"),
+    "university of british columbia": ("I141945490", "University of British Columbia"),
+    "caltech": ("I122411786", "California Institute of Technology"),
+    "california institute of technology": ("I122411786", "California Institute of Technology"),
+    "columbia": ("I5124864", "Columbia University"),
+    "columbia university": ("I5124864", "Columbia University"),
+    "cornell": ("I205783295", "Cornell University"),
+    "cornell university": ("I205783295", "Cornell University"),
+    "ucla": ("I161318765", "University of California, Los Angeles"),
+    "university of california, los angeles": ("I161318765", "University of California, Los Angeles"),
+    "eth zurich": ("I159176309", "ETH Zurich"),
+    "eth": ("I159176309", "ETH Zurich"),
+    "imperial": ("I35440088", "Imperial College London"),
+    "imperial college london": ("I35440088", "Imperial College London"),
+    "ucl": ("I45129253", "University College London"),
+    "university college london": ("I45129253", "University College London"),
+    "tsinghua": ("I1702154", "Tsinghua University"),
+    "tsinghua university": ("I1702154", "Tsinghua University"),
+    "peking": ("I20238116", "Peking University"),
+    "peking university": ("I20238116", "Peking University"),
+    "nus": ("I165779595", "National University of Singapore"),
+    "national university of singapore": ("I165779595", "National University of Singapore"),
+    "ntu": ("I172675005", "Nanyang Technological University"),
+    "nanyang technological university": ("I172675005", "Nanyang Technological University"),
+    "yale": ("I32971472", "Yale University"),
+    "yale university": ("I32971472", "Yale University"),
+    "nyu": ("I57206974", "New York University"),
+    "new york university": ("I57206974", "New York University"),
+}
+
+# Mapping of known academic institutions to their home countries
+INSTITUTION_COUNTRY_MAP: Dict[str, Tuple[str, str]] = {
+    "mit": ("US", "United States"),
+    "massachusetts institute of technology": ("US", "United States"),
+    "stanford": ("US", "United States"),
+    "stanford university": ("US", "United States"),
+    "harvard": ("US", "United States"),
+    "harvard university": ("US", "United States"),
+    "berkeley": ("US", "United States"),
+    "uc berkeley": ("US", "United States"),
+    "university of california, berkeley": ("US", "United States"),
+    "university of california berkeley": ("US", "United States"),
+    "waterloo": ("CA", "Canada"),
+    "university of waterloo": ("CA", "Canada"),
+    "uwaterloo": ("CA", "Canada"),
+    "toronto": ("CA", "Canada"),
+    "university of toronto": ("CA", "Canada"),
+    "uoft": ("CA", "Canada"),
+    "utoronto": ("CA", "Canada"),
+    "mcgill": ("CA", "Canada"),
+    "mcgill university": ("CA", "Canada"),
+    "ubc": ("CA", "Canada"),
+    "university of british columbia": ("CA", "Canada"),
+    "alberta": ("CA", "Canada"),
+    "university of alberta": ("CA", "Canada"),
+    "montreal": ("CA", "Canada"),
+    "university of montreal": ("CA", "Canada"),
+    "oxford": ("GB", "United Kingdom"),
+    "university of oxford": ("GB", "United Kingdom"),
+    "cambridge": ("GB", "United Kingdom"),
+    "university of cambridge": ("GB", "United Kingdom"),
+    "carnegie mellon": ("US", "United States"),
+    "carnegie mellon university": ("US", "United States"),
+    "cmu": ("US", "United States"),
+    "princeton": ("US", "United States"),
+    "princeton university": ("US", "United States"),
+    "caltech": ("US", "United States"),
+    "california institute of technology": ("US", "United States"),
+    "columbia": ("US", "United States"),
+    "columbia university": ("US", "United States"),
+    "cornell": ("US", "United States"),
+    "cornell university": ("US", "United States"),
+    "ucla": ("US", "United States"),
+    "university of california, los angeles": ("US", "United States"),
+    "ucsd": ("US", "United States"),
+    "university of california, san diego": ("US", "United States"),
+    "uiuc": ("US", "United States"),
+    "university of illinois": ("US", "United States"),
+    "uw": ("US", "United States"),
+    "university of washington": ("US", "United States"),
+    "nyu": ("US", "United States"),
+    "new york university": ("US", "United States"),
+    "yale": ("US", "United States"),
+    "yale university": ("US", "United States"),
+    "eth zurich": ("CH", "Switzerland"),
+    "eth": ("CH", "Switzerland"),
+    "epfl": ("CH", "Switzerland"),
+    "imperial": ("GB", "United Kingdom"),
+    "imperial college london": ("GB", "United Kingdom"),
+    "ucl": ("GB", "United Kingdom"),
+    "university college london": ("GB", "United Kingdom"),
+    "tsinghua": ("CN", "China"),
+    "tsinghua university": ("CN", "China"),
+    "peking": ("CN", "China"),
+    "peking university": ("CN", "China"),
+    "nus": ("SG", "Singapore"),
+    "national university of singapore": ("SG", "Singapore"),
+    "ntu": ("SG", "Singapore"),
+    "nanyang technological university": ("SG", "Singapore"),
+}
+
+# Comprehensive synonyms, abbreviations, and canonical variants for top universities
+INSTITUTION_ALIASES: Dict[str, List[str]] = {
+    "mit": ["massachusetts institute of technology", "mit"],
+    "massachusetts institute of technology": ["massachusetts institute of technology", "mit"],
+    "cmu": ["carnegie mellon university", "carnegie mellon", "cmu"],
+    "carnegie mellon": ["carnegie mellon university", "carnegie mellon", "cmu"],
+    "carnegie mellon university": ["carnegie mellon university", "carnegie mellon", "cmu"],
+    "stanford": ["stanford university", "stanford"],
+    "stanford university": ["stanford university", "stanford"],
+    "harvard": ["harvard university", "harvard"],
+    "harvard university": ["harvard university", "harvard"],
+    "berkeley": ["university of california, berkeley", "university of california berkeley", "uc berkeley", "ucb", "berkeley"],
+    "uc berkeley": ["university of california, berkeley", "university of california berkeley", "uc berkeley", "ucb", "berkeley"],
+    "university of california, berkeley": ["university of california, berkeley", "university of california berkeley", "uc berkeley", "ucb", "berkeley"],
+    "university of california berkeley": ["university of california, berkeley", "university of california berkeley", "uc berkeley", "ucb", "berkeley"],
+    "waterloo": ["university of waterloo", "uwaterloo", "waterloo"],
+    "university of waterloo": ["university of waterloo", "uwaterloo", "waterloo"],
+    "uwaterloo": ["university of waterloo", "uwaterloo", "waterloo"],
+    "toronto": ["university of toronto", "uoft", "utoronto", "toronto"],
+    "university of toronto": ["university of toronto", "uoft", "utoronto", "toronto"],
+    "uoft": ["university of toronto", "uoft", "utoronto", "toronto"],
+    "utoronto": ["university of toronto", "uoft", "utoronto", "toronto"],
+    "mcgill": ["mcgill university", "mcgill"],
+    "mcgill university": ["mcgill university", "mcgill"],
+    "ubc": ["university of british columbia", "ubc"],
+    "university of british columbia": ["university of british columbia", "ubc"],
+    "oxford": ["university of oxford", "oxford"],
+    "university of oxford": ["university of oxford", "oxford"],
+    "cambridge": ["university of cambridge", "cambridge"],
+    "university of cambridge": ["university of cambridge", "cambridge"],
+    "princeton": ["princeton university", "princeton"],
+    "princeton university": ["princeton university", "princeton"],
+    "caltech": ["california institute of technology", "caltech"],
+    "california institute of technology": ["california institute of technology", "caltech"],
+    "columbia": ["columbia university", "columbia"],
+    "columbia university": ["columbia university", "columbia"],
+    "cornell": ["cornell university", "cornell"],
+    "cornell university": ["cornell university", "cornell"],
+    "ucla": ["university of california, los angeles", "university of california los angeles", "ucla"],
+    "university of california, los angeles": ["university of california, los angeles", "university of california los angeles", "ucla"],
+    "ucsd": ["university of california, san diego", "university of california san diego", "ucsd"],
+    "uiuc": ["university of illinois urbana-champaign", "university of illinois", "uiuc"],
+    "uw": ["university of washington", "uw"],
+    "university of washington": ["university of washington", "uw"],
+    "nyu": ["new york university", "nyu"],
+    "new york university": ["new york university", "nyu"],
+    "yale": ["yale university", "yale"],
+    "yale university": ["yale university", "yale"],
+    "eth": ["eth zurich", "eth zürich", "eidgenössische technische hochschule", "eth"],
+    "eth zurich": ["eth zurich", "eth zürich", "eidgenössische technische hochschule", "eth"],
+    "epfl": ["école polytechnique fédérale de lausanne", "epfl"],
+    "imperial": ["imperial college london", "imperial college", "imperial"],
+    "imperial college london": ["imperial college london", "imperial college", "imperial"],
+    "ucl": ["university college london", "ucl"],
+    "university college london": ["university college london", "ucl"],
+    "tsinghua": ["tsinghua university", "tsinghua"],
+    "peking": ["peking university", "peking"],
+    "nus": ["national university of singapore", "nus"],
+    "ntu": ["nanyang technological university", "ntu"],
+}
+
+
+def normalize_institution_str(s: str) -> str:
+    """Normalize text by lowering, removing punctuation, and collapsing whitespace."""
+    if not s:
+        return ""
+    cleaned = re.sub(r"[^\w\s]", " ", s.lower())
+    return " ".join(cleaned.split())
+
+
+INSTITUTION_STOPWORDS = {"of", "the", "at", "in", "and", "for", "on", "a", "an"}
+
+
+def paper_matches_institution(
+    paper: Paper,
+    target_institution: Optional[str],
+    resolved_name: Optional[str] = None
+) -> bool:
+    """
+    Strictly verify whether a paper is affiliated with a target institution.
+    Evaluates:
+      1. Canonical aliases & abbreviations (e.g. 'MIT' -> 'Massachusetts Institute of Technology').
+      2. Exact normalized string equality.
+      3. Word-bounded acronym/token match.
+      4. Significant token overlap.
+    Returns False if target_institution is specified but paper has no institutions or no match.
+    """
+    if not target_institution or not target_institution.strip():
+        return True
+
+    target_raw = target_institution.strip().lower()
+    target_norm = normalize_institution_str(target_institution)
+    if not target_norm:
+        return True
+
+    if not paper.institutions:
+        return False
+
+    # Collect candidate match strings for target
+    cands: Set[str] = {target_raw, target_norm}
+    if resolved_name:
+        cands.add(resolved_name.strip().lower())
+        cands.add(normalize_institution_str(resolved_name))
+
+    if target_raw in INSTITUTION_ALIASES:
+        for alias in INSTITUTION_ALIASES[target_raw]:
+            cands.add(alias.lower())
+            cands.add(normalize_institution_str(alias))
+
+    if target_raw in KNOWN_INSTITUTIONS:
+        disp = KNOWN_INSTITUTIONS[target_raw][1].lower()
+        cands.add(disp)
+        cands.add(normalize_institution_str(disp))
+
+    # Token-level keywords of target
+    target_tokens = [w for w in target_norm.split() if w not in INSTITUTION_STOPWORDS]
+
+    for inst in paper.institutions:
+        if not inst:
+            continue
+        inst_clean = inst.strip().lower()
+        inst_norm = normalize_institution_str(inst)
+        inst_tokens = set(inst_norm.split())
+
+        for cand in cands:
+            if not cand:
+                continue
+            # 1. Exact equality
+            if cand == inst_clean or cand == inst_norm:
+                return True
+
+            # 2. Short acronym match with word boundaries
+            if len(cand) <= 4:
+                pattern = rf"(?:^|[\s,;./\(\)\[\]\-]){re.escape(cand)}(?:[\s,;./\(\)\[\]\-]|$)"
+                if re.search(pattern, inst_clean) or re.search(pattern, inst_norm):
+                    return True
+            else:
+                # 3. Substring match for longer strings
+                if cand in inst_clean or cand in inst_norm:
+                    return True
+                if inst_norm and inst_norm in cand:
+                    return True
+
+        # 4. Significant token overlap (e.g. all keywords of target present in inst)
+        if target_tokens and all(tok in inst_tokens for tok in target_tokens):
+            return True
+
+    return False
+
+
+def resolve_country_code(country_input: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Given a country name, abbreviation, or ISO code, returns:
+    (alpha2_code, canonical_name), e.g. ("CA", "Canada").
+    Returns (None, None) if country_input is empty.
+    If an unknown 2-letter alphabetic string is provided, returns (raw.upper(), raw.upper()).
+    """
+    if not country_input:
+        return None, None
+    raw = country_input.strip()
+    if not raw:
+        return None, None
+    key = raw.lower()
+    if key in COUNTRY_REGISTRY:
+        return COUNTRY_REGISTRY[key]
+    if len(raw) == 2 and raw.isalpha():
+        return raw.upper(), raw.upper()
+    return None, raw.title()
+
+
+def detect_country_from_text(text: str) -> List[str]:
+    """
+    Scans a free-form affiliation string or institution text for country matches.
+    Returns a deduplicated list of canonical country names found.
+    """
+    if not text:
+        return []
+    text_clean = f" {text.lower()} "
+    found: List[str] = []
+    sorted_aliases = sorted(COUNTRY_REGISTRY.items(), key=lambda x: len(x[0]), reverse=True)
+    for alias, (code, canonical) in sorted_aliases:
+        pattern = rf"(?:^|[\s,;./\(\)\[\]]){re.escape(alias)}(?:[\s,;./\(\)\[\]]|$)"
+        if re.search(pattern, text_clean):
+            if canonical not in found:
+                found.append(canonical)
+    return found
+
+
+def paper_matches_country(paper: Paper, target_code: Optional[str], target_name: Optional[str]) -> bool:
+    """
+    Strictly check if a paper matches a target country by ISO code, canonical name,
+    institutions list, or affiliations text.
+    """
+    if not target_code and not target_name:
+        return True
+
+    code = (target_code or "").upper()
+    name = (target_name or "").lower()
+
+    # 1. Direct paper country
+    if paper.country:
+        p_c = paper.country.strip()
+        if code and p_c.upper() == code:
+            return True
+        if name and name in p_c.lower():
+            return True
+
+    # 2. Paper countries list
+    if paper.countries:
+        for c in paper.countries:
+            c_str = c.strip()
+            if code and c_str.upper() == code:
+                return True
+            if name and name in c_str.lower():
+                return True
+
+    # 3. Paper institutions / affiliations & known institution country mapping
+    if paper.institutions:
+        for inst in paper.institutions:
+            inst_lower = inst.lower()
+            if name and name in inst_lower:
+                return True
+            if code:
+                code_pattern = rf"(?:^|[\s,;./\(\)\[\]]){re.escape(code.lower())}(?:[\s,;./\(\)\[\]]|$)"
+                if re.search(code_pattern, inst_lower):
+                    return True
+            # Check institution against INSTITUTION_COUNTRY_MAP
+            for known_inst, (ic_code, ic_name) in INSTITUTION_COUNTRY_MAP.items():
+                if known_inst in inst_lower or inst_lower in known_inst:
+                    if code and ic_code.upper() == code:
+                        return True
+                    if name and name in ic_name.lower():
+                        return True
+
+    return False
 
 PI_ROLE_HINT = "Lab Lead / Principal Investigator"
 LEAD_AUTHOR_ROLE_HINT = "Lead Author / Researcher"
@@ -666,7 +1166,8 @@ async def fetch_arxiv_papers(
     max_results: int = 10,
     timeout: float = 12.0,
     author: Optional[str] = None,
-    categories: Optional[List[str]] = None
+    categories: Optional[List[str]] = None,
+    country: Optional[str] = None
 ) -> List[Paper]:
     """
     Fetch papers from ArXiv API filtered to CS categories or custom categories.
@@ -782,6 +1283,7 @@ async def fetch_arxiv_papers(
                 authors_data = [authors_data]
             authors = []
             affiliations = []
+            entry_countries = []
             for a in authors_data:
                 if isinstance(a, dict):
                     if "name" in a:
@@ -792,6 +1294,9 @@ async def fetch_arxiv_papers(
                         aff_clean = aff_text.strip()
                         if aff_clean and aff_clean not in affiliations:
                             affiliations.append(aff_clean)
+                            for dc in detect_country_from_text(aff_clean):
+                                if dc not in entry_countries:
+                                    entry_countries.append(dc)
                 elif isinstance(a, str):
                     authors.append(a)
 
@@ -848,6 +1353,8 @@ async def fetch_arxiv_papers(
                     title=title,
                     authors=authors,
                     institutions=affiliations,
+                    country=entry_countries[0] if entry_countries else None,
+                    countries=entry_countries,
                     year=year,
                     abstract=abstract,
                     tldr=None,
@@ -871,6 +1378,7 @@ async def fetch_semantic_scholar_papers(
     api_key: Optional[str] = None,
     limit: int = 10,
     timeout: float = 12.0,
+    country: Optional[str] = None,
     **kwargs: Any
 ) -> List[Paper]:
     """
@@ -1108,24 +1616,6 @@ KNOWN_AUTHORS: Dict[str, Tuple[str, str]] = {
     "andrew ng": ("A5088298909", "Andrew Ng"),
 }
 
-KNOWN_INSTITUTIONS: Dict[str, Tuple[str, str]] = {
-    "mit": ("I63966007", "Massachusetts Institute of Technology"),
-    "massachusetts institute of technology": ("I63966007", "Massachusetts Institute of Technology"),
-    "stanford": ("I97018004", "Stanford University"),
-    "stanford university": ("I97018004", "Stanford University"),
-    "harvard": ("I136199984", "Harvard University"),
-    "harvard university": ("I136199984", "Harvard University"),
-    "berkeley": ("I95457486", "University of California, Berkeley"),
-    "uc berkeley": ("I95457486", "University of California, Berkeley"),
-    "oxford": ("I40120149", "University of Oxford"),
-    "university of oxford": ("I40120149", "University of Oxford"),
-    "cambridge": ("I241749", "University of Cambridge"),
-    "university of cambridge": ("I241749", "University of Cambridge"),
-    "carnegie mellon": ("I74973187", "Carnegie Mellon University"),
-    "cmu": ("I74973187", "Carnegie Mellon University"),
-    "princeton": ("I20089843", "Princeton University"),
-    "princeton university": ("I20089843", "Princeton University"),
-}
 
 
 async def resolve_openalex_author_id(
@@ -1147,6 +1637,13 @@ async def resolve_openalex_author_id(
     cached = get_cached_entity_id(cache_key)
     if cached is not None:
         return cached
+
+    # Fast path: Check known author mapping first (0ms latency)
+    if clean_name.lower() in KNOWN_AUTHORS:
+        res = KNOWN_AUTHORS[clean_name.lower()]
+        set_cached_entity_id(cache_key, res)
+        logger.info("Using known author mapping for %r -> %s", clean_name, res)
+        return res
 
     http_client = client or get_shared_http_client()
     headers = {
@@ -1212,6 +1709,13 @@ async def resolve_openalex_institution_id(
     if cached is not None:
         return cached
 
+    # Fast path: Check known institution mapping first (0ms latency)
+    if clean_name.lower() in KNOWN_INSTITUTIONS:
+        res = KNOWN_INSTITUTIONS[clean_name.lower()]
+        set_cached_entity_id(cache_key, res)
+        logger.info("Using known institution mapping for %r -> %s", clean_name, res)
+        return res
+
     http_client = client or get_shared_http_client()
     headers = {
         "User-Agent": _openalex_user_agent(),
@@ -1258,14 +1762,15 @@ async def resolve_openalex_institution_id(
 
 def _extract_openalex_authorship(
     authorships: Any,
-) -> Tuple[List[str], List[str], Optional[str], List[Dict[str, Any]]]:
+) -> Tuple[List[str], List[str], List[str], Optional[str], List[Dict[str, Any]]]:
     """
-    Parse OpenAlex authorship records into (authors, institutions,
+    Parse OpenAlex authorship records into (authors, institutions, countries,
     corresponding_author, author_details). Zero network calls — straight
-    field extraction feeding Paper PI-detection signals.
+    field extraction feeding Paper PI-detection signals and country filtering.
     """
     authors: List[str] = []
     institutions: List[str] = []
+    countries: List[str] = []
     corresponding: Optional[str] = None
     details: List[Dict[str, Any]] = []
     for a in (authorships or []):
@@ -1286,11 +1791,24 @@ def _extract_openalex_authorship(
                 "is_corresponding": is_corr,
             })
         for inst in a.get("institutions", []):
-            if isinstance(inst, dict) and inst.get("display_name"):
-                iname = inst["display_name"].strip()
+            if isinstance(inst, dict):
+                iname = (inst.get("display_name") or "").strip()
                 if iname and iname not in institutions:
                     institutions.append(iname)
-    return authors, institutions, corresponding, details
+                cc = (inst.get("country_code") or "").strip().upper()
+                if cc:
+                    _, cname = resolve_country_code(cc)
+                    resolved_country = cname or cc
+                    if resolved_country not in countries:
+                        countries.append(resolved_country)
+        for raw_c in a.get("countries", []):
+            if isinstance(raw_c, str) and raw_c.strip():
+                cc = raw_c.strip().upper()
+                _, cname = resolve_country_code(cc)
+                resolved_country = cname or cc
+                if resolved_country not in countries:
+                    countries.append(resolved_country)
+    return authors, institutions, countries, corresponding, details
 
 
 async def fetch_openalex_papers(
@@ -1299,7 +1817,8 @@ async def fetch_openalex_papers(
     limit: int = 10,
     timeout: float = 12.0,
     author: Optional[str] = None,
-    institution: Optional[str] = None
+    institution: Optional[str] = None,
+    country: Optional[str] = None
 ) -> List[Paper]:
     """
     Fetch academic papers from OpenAlex works endpoint with has_fulltext:true.
@@ -1329,7 +1848,14 @@ async def fetch_openalex_papers(
             clean_inst_id = inst_res[0].split("/")[-1] if "/" in inst_res[0] else inst_res[0]
             filter_parts.append(f"institutions.id:{clean_inst_id}")
         else:
-            filter_parts.append(f"raw_affiliation_strings.search:{institution.strip()}")
+            filter_parts.append(f"raw_affiliation_strings.search:{quote_plus(institution.strip().replace(',', ' '))}")
+
+    if country and country.strip():
+        c_code, c_name = resolve_country_code(country.strip())
+        if c_code:
+            filter_parts.append(f"institutions.country_code:{c_code.lower()}")
+        else:
+            filter_parts.append(f"raw_affiliation_strings.search:{quote_plus(c_name or country.strip())}")
 
     if not clean_kw and len(filter_parts) == 1:
         return papers
@@ -1376,10 +1902,11 @@ async def fetch_openalex_papers(
             if not title:
                 continue
 
-            # Authors, Institutions & PI signals (corresponding/position records)
-            authors, institutions, corresponding, details = _extract_openalex_authorship(
+            # Authors, Institutions, Countries & PI signals
+            authors, institutions, countries, corresponding, details = _extract_openalex_authorship(
                 item.get("authorships", [])
             )
+            primary_country = countries[0] if countries else None
 
             # Year
             year = item.get("publication_year")
@@ -1410,6 +1937,8 @@ async def fetch_openalex_papers(
                     title=title,
                     authors=authors,
                     institutions=institutions,
+                    country=primary_country,
+                    countries=countries,
                     year=year,
                     abstract=abstract,
                     tldr=None,
@@ -1437,7 +1966,8 @@ async def fetch_entity_papers(
     name: str,
     limit: int = 50,
     client: Optional[httpx.AsyncClient] = None,
-    timeout: float = 15.0
+    timeout: float = 15.0,
+    country: Optional[str] = None
 ) -> List[Paper]:
     """
     Dedicated endpoint logic to query ALL works by a specific researcher or affiliated with an institution
@@ -1464,7 +1994,7 @@ async def fetch_entity_papers(
     effective_limit = min(max(limit, 1), 100)
 
     # Check search cache first
-    cache_key = f"entity:{entity_type_clean}:{clean_name.lower()}:{effective_limit}"
+    cache_key = f"entity:{entity_type_clean}:{clean_name.lower()}:{country.lower() if country else ''}:{effective_limit}"
     cached = search_cache.get(cache_key)
     if cached is not None:
         cached_papers, _ = cached
@@ -1483,9 +2013,10 @@ async def fetch_entity_papers(
         title = (item.get("title") or "").strip()
         if not title:
             return None
-        authors, institutions, corresponding, details = _extract_openalex_authorship(
+        authors, institutions, countries, corresponding, details = _extract_openalex_authorship(
             item.get("authorships", [])
         )
+        primary_country = countries[0] if countries else None
         year = item.get("publication_year")
         if not isinstance(year, int):
             year = None
@@ -1502,6 +2033,8 @@ async def fetch_entity_papers(
             title=title,
             authors=authors,
             institutions=institutions,
+            country=primary_country,
+            countries=countries,
             year=year,
             abstract=abstract,
             tldr=None,
@@ -1514,6 +2047,9 @@ async def fetch_entity_papers(
             corresponding_author=corresponding,
             author_details=details
         )
+
+    c_code, c_name = resolve_country_code(country) if country else (None, None)
+    country_filter_clause = f",institutions.country_code:{c_code.lower()}" if c_code else ""
 
     if entity_type_clean == "institution":
         # Step 1: Resolve institution entity ID
@@ -1544,7 +2080,7 @@ async def fetch_entity_papers(
 
         # Query works using institution ID if resolved
         if inst_id:
-            works_url = f"https://api.openalex.org/works?filter=institutions.id:{inst_id}&sort=cited_by_count:desc&per-page={effective_limit}{_openalex_mailto_suffix()}"
+            works_url = f"https://api.openalex.org/works?filter=institutions.id:{inst_id}{country_filter_clause}&sort=cited_by_count:desc&per-page={effective_limit}{_openalex_mailto_suffix()}"
             try:
                 async with openalex_limiter:
                     works_res = await http_client.get(works_url, headers=headers, timeout=15.0)
@@ -1752,13 +2288,14 @@ async def discover_paper_code_urls(
 
 
 def deduplicate_and_rank(
-    arxiv_papers: List[Paper],
-    ss_papers: List[Paper],
+    arxiv_papers: Optional[List[Paper]] = None,
+    ss_papers: Optional[List[Paper]] = None,
     openalex_papers: Optional[List[Paper]] = None,
     top_k: int = 6,
     similarity_threshold: float = 0.85,
     author: Optional[str] = None,
     institution: Optional[str] = None,
+    country: Optional[str] = None,
     query: Optional[str] = None,
 ) -> List[Paper]:
     """
@@ -1817,6 +2354,13 @@ def deduplicate_and_rank(
                     if inst not in existing.institutions:
                         existing.institutions.append(inst)
 
+                # Merge country and countries
+                if not existing.country and candidate.country:
+                    existing.country = candidate.country
+                for c in candidate.countries:
+                    if c not in existing.countries:
+                        existing.countries.append(c)
+
                 # Merge abstract if candidate has longer text
                 if len(candidate.abstract) > len(existing.abstract):
                     existing.abstract = candidate.abstract
@@ -1826,18 +2370,43 @@ def deduplicate_and_rank(
         # Not matched: append copy
         merged_papers.append(candidate.model_copy(deep=True))
 
-    for p in arxiv_papers:
+    for p in (arxiv_papers or []):
         merge_candidate(p)
-    for p in ss_papers:
+    for p in (ss_papers or []):
         merge_candidate(p)
     for p in openalex_list:
         merge_candidate(p)
 
-    # Semantic relevance ranking (intent-based, synonym-aware):
     author_clean = author.strip().lower() if author else ""
     inst_clean = institution.strip().lower() if institution else ""
+    c_code, c_name = resolve_country_code(country) if country else (None, None)
+
+    # 1. Strict Institution filtering (AND composition)
+    resolved_inst = None
+    if inst_clean:
+        if inst_clean in KNOWN_INSTITUTIONS:
+            resolved_inst = KNOWN_INSTITUTIONS[inst_clean][1]
+        merged_papers = [
+            p for p in merged_papers
+            if paper_matches_institution(p, inst_clean, resolved_name=resolved_inst)
+        ]
+
+    # 2. Strict Country filtering (AND composition)
+    if c_code or c_name:
+        merged_papers = [
+            p for p in merged_papers
+            if paper_matches_country(p, c_code, c_name)
+        ]
+
+    # 3. Strict Author filtering (AND composition)
+    if author_clean:
+        merged_papers = [
+            p for p in merged_papers
+            if any(author_clean in a.lower() for a in p.authors)
+        ]
+
+    # Semantic relevance ranking (intent-based, synonym-aware):
     intent_text = (query or "").strip()
-    # Precompute per-paper semantic scores once (bounded O(papers x text)).
     semantic_scores: Dict[str, float] = {}
     if intent_text:
         for p in merged_papers:
@@ -1845,12 +2414,13 @@ def deduplicate_and_rank(
 
     def ranking_score(p: Paper) -> Tuple[int, float, int, int, int]:
         author_match = 1 if (author_clean and any(author_clean in a.lower() for a in p.authors)) else 0
-        inst_match = 1 if (inst_clean and any(inst_clean in i.lower() for i in p.institutions)) else 0
+        inst_match = 1 if (inst_clean and paper_matches_institution(p, inst_clean, resolved_inst)) else 0
+        country_match = 1 if ((c_code or c_name) and paper_matches_country(p, c_code, c_name)) else 0
         semantic = round(semantic_scores.get(p.id, 0.0), 4) if intent_text else 0.0
         has_code = 1 if p.code_url else 0
         year_score = p.year if p.year is not None else 0
         citation_score = p.citation_count if p.citation_count is not None else 0
-        return (author_match + inst_match, semantic, has_code, year_score, citation_score)
+        return (country_match * 2 + inst_match * 2 + author_match, semantic, has_code, year_score, citation_score)
 
     merged_papers.sort(key=ranking_score, reverse=True)
     return merged_papers[:top_k]
@@ -1864,6 +2434,7 @@ async def search_academic_papers(
     client: Optional[httpx.AsyncClient] = None,
     author: Optional[str] = None,
     institution: Optional[str] = None,
+    country: Optional[str] = None,
     categories: Optional[List[str]] = None,
     **kwargs: Any
 ) -> Tuple[List[Paper], Dict[str, Any]]:
@@ -1878,7 +2449,10 @@ async def search_academic_papers(
     Supports scaling up to 100 papers, author filtering, institution filtering, and category selection.
     Expansion is local-only (no extra blocking calls); empty intent stays filter-only.
     """
-    cache_key = f"{inquiry}|author:{author or ''}|inst:{institution or ''}|cat:{','.join(categories) if categories else ''}|k:{top_k}"
+    # Unify institution and university aliases
+    effective_inst = (institution or kwargs.get("university") or "").strip() or None
+    effective_country = (country or kwargs.get("country_code") or "").strip() or None
+    cache_key = f"{inquiry}|author:{author or ''}|inst:{effective_inst or ''}|country:{effective_country or ''}|cat:{','.join(categories) if categories else ''}|k:{top_k}"
     # 1. Check TTL Cache first
     if use_cache:
         cached_result = search_cache.get(cache_key)
@@ -1906,6 +2480,7 @@ async def search_academic_papers(
         "retrieval_mode": "semantic",
         "author_filter": author,
         "institution_filter": institution,
+        "country_filter": country,
         "categories_filter": categories,
         "arxiv_count": 0,
         "ss_count": 0,
@@ -1926,20 +2501,23 @@ async def search_academic_papers(
         http_client,
         max_results=target_fetch_count,
         author=author,
-        categories=categories
+        categories=categories,
+        country=country
     )
     ss_task = fetch_semantic_scholar_papers(
         keywords,
         http_client,
         api_key=effective_ss_key or None,
-        limit=target_fetch_count
+        limit=target_fetch_count,
+        country=country
     )
     openalex_task = fetch_openalex_papers(
         keywords,
         http_client,
         limit=target_fetch_count,
         author=author,
-        institution=institution
+        institution=effective_inst,
+        country=effective_country
     )
 
     results = await asyncio.gather(arxiv_task, ss_task, openalex_task, return_exceptions=True)
@@ -1991,7 +2569,8 @@ async def search_academic_papers(
         openalex_papers,
         top_k=top_k,
         author=author,
-        institution=institution,
+        institution=effective_inst,
+        country=effective_country,
         query=keywords,
     )
     metadata["final_count"] = len(final_papers)

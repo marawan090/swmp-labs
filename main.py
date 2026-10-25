@@ -610,6 +610,8 @@ class SearchRequest(BaseModel):
     inquiry: Optional[str] = Field(default=None, description="Research query or topic (alias)")
     author: Optional[str] = Field(default=None, description="Filter by author name")
     institution: Optional[str] = Field(default=None, description="Filter by institution or university name")
+    university: Optional[str] = Field(default=None, description="Filter by university name (alias for institution)")
+    country: Optional[str] = Field(default=None, description="Filter by country or country code (e.g. Canada, USA, CA, US)")
     categories: Optional[List[str]] = Field(default=None, description="Filter by subject categories")
     top_k: int = Field(default=10, ge=1, le=100)
     limit: Optional[int] = Field(default=None, ge=1, le=100, description="Target paper count (10, 25, 50, 100)")
@@ -624,6 +626,15 @@ class SearchRequest(BaseModel):
             val = q or inq or ""
             data["query"] = val
             data["inquiry"] = val
+            inst = data.get("institution") or data.get("university") or data.get("univ")
+            if inst is not None:
+                inst_str = str(inst).strip()
+                data["institution"] = inst_str if inst_str else None
+                data["university"] = inst_str if inst_str else None
+            c = data.get("country")
+            if c is not None:
+                c_str = str(c).strip()
+                data["country"] = c_str if c_str else None
         return data
 
 
@@ -990,6 +1001,9 @@ class ArtifactCreateRequest(BaseModel):
 
 class SavedPaperCreateRequest(BaseModel):
     paper_id: str = Field(max_length=256)
+    country: Optional[str] = Field(default=None, description="Country or region of publication / primary institution")
+    institution: Optional[str] = Field(default=None, description="Primary institution or university")
+    university: Optional[str] = Field(default=None, description="Primary university or institution")
     paper_metadata: Optional[Dict[str, Any]] = Field(default=None)
 
 
@@ -1243,8 +1257,13 @@ async def create_artifact(
 
 
 @app.get("/api/papers/saved")
-async def list_saved_papers(user: Optional[Dict[str, Any]] = Depends(get_current_user)):
-    """Return the current user's bookmarked papers (guest: [])."""
+async def list_saved_papers(
+    country: Optional[str] = Query(None, description="Optional filter by country"),
+    institution: Optional[str] = Query(None, description="Optional filter by institution"),
+    university: Optional[str] = Query(None, description="Optional filter by university (alias for institution)"),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user)
+):
+    """Return the current user's bookmarked papers with optional country and university filters (guest: [])."""
     if not user:
         return {"papers": []}
     client, err = _require_supabase()
@@ -1252,14 +1271,37 @@ async def list_saved_papers(user: Optional[Dict[str, Any]] = Depends(get_current
         return {"papers": []}
     try:
         uclient = get_user_client(user["token"]) or client
-        res = (
+        query = (
             uclient.table("saved_papers")
             .select("*")
             .eq("user_id", user["id"])
-            .order("created_at", desc=True)
-            .execute()
         )
-        return {"papers": res.data or []}
+        c_clean = (country or "").strip().lower() or None
+        effective_inst = (institution or university or "").strip().lower() or None
+
+        if c_clean:
+            query = query.ilike("country", f"%{c_clean}%")
+        if effective_inst:
+            query = query.ilike("institution", f"%{effective_inst}%")
+
+        res = query.order("created_at", desc=True).execute()
+        papers_data = res.data or []
+
+        # Compositional in-memory fallback filter
+        if c_clean:
+            papers_data = [
+                p for p in papers_data
+                if c_clean in (p.get("country") or "").lower()
+                or c_clean in ((p.get("paper_metadata") or {}).get("country") or "").lower()
+                or any(c_clean in c.lower() for c in (p.get("paper_metadata") or {}).get("countries", []))
+            ]
+        if effective_inst:
+            papers_data = [
+                p for p in papers_data
+                if effective_inst in (p.get("institution") or "").lower()
+                or any(effective_inst in i.lower() for i in (p.get("paper_metadata") or {}).get("institutions", []))
+            ]
+        return {"papers": papers_data}
     except Exception as e:
         logger.error("Failed to list saved papers: %s", str(e))
         return {"papers": []}
@@ -1291,11 +1333,24 @@ async def save_paper_bookmark(
         )
         if existing.data:
             return {"status": "ok", "paper_id": payload.paper_id, "deduped": True}
-        uclient.table("saved_papers").insert({
+        paper_country = payload.country
+        if not paper_country and isinstance(payload.paper_metadata, dict):
+            paper_country = payload.paper_metadata.get("country")
+        paper_inst = payload.institution or payload.university
+        if not paper_inst and isinstance(payload.paper_metadata, dict):
+            insts = payload.paper_metadata.get("institutions", [])
+            if insts and isinstance(insts, list):
+                paper_inst = insts[0]
+        insert_payload: Dict[str, Any] = {
             "user_id": user["id"],
             "paper_id": payload.paper_id,
             "paper_metadata": payload.paper_metadata or {},
-        }).execute()
+        }
+        if paper_country:
+            insert_payload["country"] = paper_country
+        if paper_inst:
+            insert_payload["institution"] = paper_inst
+        uclient.table("saved_papers").insert(insert_payload).execute()
         return {"status": "ok", "paper_id": payload.paper_id, "deduped": False}
     except Exception as e:
         logger.error("Failed to save paper bookmark: %s", str(e))
@@ -1520,6 +1575,7 @@ async def search_endpoint(payload: SearchRequest):
         top_k=effective_top_k,
         author=payload.author,
         institution=payload.institution,
+        country=payload.country,
         categories=payload.categories
     )
     return {
@@ -1535,6 +1591,7 @@ async def search_endpoint(payload: SearchRequest):
 async def search_entity_endpoint(
     entity_type: str = Query(..., description="Entity type: 'author' or 'institution'"),
     name: str = Query(..., description="Researcher or institution name"),
+    country: Optional[str] = Query(None, description="Optional country filter (e.g. Canada, USA, CA, US)"),
     limit: int = Query(50, ge=1, le=100, description="Paper count up to 100")
 ):
     """
@@ -1542,13 +1599,15 @@ async def search_entity_endpoint(
     Queries OpenAlex works index, discovers code repositories, and returns normalized papers.
     """
     clean_type = (entity_type or "").strip().lower()
+    if clean_type == "university":
+        clean_type = "institution"
     if clean_type not in ("author", "institution"):
-        raise HTTPException(status_code=400, detail="entity_type must be 'author' or 'institution'")
+        raise HTTPException(status_code=400, detail="entity_type must be 'author', 'institution', or 'university'")
     clean_name = (name or "").strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="name parameter is required")
 
-    papers = await fetch_entity_papers(entity_type=clean_type, name=clean_name, limit=limit)
+    papers = await fetch_entity_papers(entity_type=clean_type, name=clean_name, limit=limit, country=country)
     return {
         "entity_type": clean_type,
         "name": clean_name,
@@ -1597,6 +1656,8 @@ async def research_stream_endpoint(
     search_mode: str = Query("topic", description="Search mode: 'topic', 'author', 'institution', or 'custom' (combined topic+author+institution)"),
     author: Optional[str] = Query(None, description="Optional author filter (used by topic/custom modes)"),
     institution: Optional[str] = Query(None, description="Optional institution filter (used by topic/custom modes)"),
+    university: Optional[str] = Query(None, description="Optional university filter (alias for institution)"),
+    country: Optional[str] = Query(None, description="Optional country filter (e.g. 'Canada', 'USA', 'CA', 'US')"),
     orcarouter_key: Optional[str] = Query(None, description="Optional override OrcaRouter API key"),
     semantic_scholar_key: Optional[str] = Query(None, description="Optional override Semantic Scholar API key")
 ):
@@ -1620,11 +1681,13 @@ async def research_stream_endpoint(
     normalized_mode = (search_mode or "topic").strip().lower()
     clean_query = (query or "").strip()
     clean_author = (author or "").strip() or None
-    clean_institution = (institution or "").strip() or None
+    raw_inst = institution or university or ""
+    clean_institution = raw_inst.strip() or None
+    clean_country = (country or "").strip() or None
 
-    # Custom/advanced search requires at least one of topic, author, institution.
-    if normalized_mode == "custom" and not clean_query and not clean_author and not clean_institution:
-        raise HTTPException(status_code=400, detail="Custom search requires at least one of: query, author, or institution.")
+    # Custom/advanced search requires at least one of topic, author, institution, country.
+    if normalized_mode == "custom" and not clean_query and not clean_author and not clean_institution and not clean_country:
+        raise HTTPException(status_code=400, detail="Custom search requires at least one of: query, author, institution, or country.")
 
     effective_orca_key = (orcarouter_key or runtime_config["orcarouter_api_key"] or "").strip()
     effective_ss_key = (semantic_scholar_key or runtime_config.get("semantic_scholar_api_key") or "").strip()
@@ -1633,9 +1696,9 @@ async def research_stream_endpoint(
         try:
             # Check if this is an entity search (author or university/institution)
             # NOTE: 'custom' intentionally falls through to the combined topic pipeline below.
-            if normalized_mode in ("author", "institution"):
-                clean_mode = normalized_mode
-                entity_cache_key = f"entity:{clean_mode}:{clean_query.lower()}:{limit}"
+            if normalized_mode in ("author", "institution", "university"):
+                clean_mode = "institution" if normalized_mode in ("institution", "university") else normalized_mode
+                entity_cache_key = f"entity:{clean_mode}:{clean_query.lower()}:{clean_country.lower() if clean_country else ''}:{limit}"
                 cached_entity = search_cache.get(entity_cache_key)
                 if cached_entity is not None and cached_entity[0]:
                     cached_papers, cached_meta = cached_entity
@@ -1672,7 +1735,7 @@ async def research_stream_endpoint(
                 yield sse_event({"type": "status", "stage": "keywords_ready", "keywords": clean_query, "message": f"Target {clean_mode}: '{clean_query}'"})
                 yield sse_event({"type": "status", "stage": "fetching_openalex", "message": f"Querying OpenAlex works index for {clean_mode} '{clean_query}' (up to {limit} papers)..."})
 
-                entity_papers = await fetch_entity_papers(entity_type=clean_mode, name=clean_query, limit=limit)
+                entity_papers = await fetch_entity_papers(entity_type=clean_mode, name=clean_query, limit=limit, country=clean_country)
 
                 yield sse_event({"type": "status", "stage": "discovering_code", "message": "Scanning papers for open-source code repositories..."})
                 await asyncio.sleep(0.04)
@@ -1705,7 +1768,7 @@ async def research_stream_endpoint(
 
             # Topic / Custom Combined Exploration Pipeline (multi-field query builder)
             # 'topic' = standalone topic; 'custom' = topic + author + institution combined.
-            cache_key = f"{clean_query}|author:{clean_author or ''}|inst:{clean_institution or ''}|k:{limit}"
+            cache_key = f"{clean_query}|author:{clean_author or ''}|inst:{clean_institution or ''}|country:{clean_country or ''}|k:{limit}"
             cached_entry = search_cache.get(cache_key) or search_cache.get(clean_query)
             if cached_entry is not None:
                 cached_papers, cached_meta = cached_entry
@@ -1781,6 +1844,7 @@ async def research_stream_endpoint(
                 "retrieval_mode": "semantic",
                 "author_filter": clean_author,
                 "institution_filter": clean_institution,
+                "country_filter": clean_country,
                 "search_mode": normalized_mode,
                 "arxiv_count": 0,
                 "ss_count": 0,
@@ -1795,14 +1859,15 @@ async def research_stream_endpoint(
             fetch_quota = min(max(limit, 10), 100)
             client = get_shared_http_client()
 
-            arxiv_task = fetch_arxiv_papers(keywords, client, max_results=fetch_quota, author=clean_author)
+            arxiv_task = fetch_arxiv_papers(keywords, client, max_results=fetch_quota, author=clean_author, country=clean_country)
             ss_task = fetch_semantic_scholar_papers(
                 keywords,
                 client,
                 api_key=effective_ss_key or None,
-                limit=fetch_quota
+                limit=fetch_quota,
+                country=clean_country
             )
-            openalex_task = fetch_openalex_papers(keywords, client, limit=fetch_quota, author=clean_author, institution=clean_institution)
+            openalex_task = fetch_openalex_papers(keywords, client, limit=fetch_quota, author=clean_author, institution=clean_institution, country=clean_country)
 
             results = await asyncio.gather(arxiv_task, ss_task, openalex_task, return_exceptions=True)
 
@@ -1852,6 +1917,7 @@ async def research_stream_endpoint(
                 top_k=limit,
                 author=clean_author,
                 institution=clean_institution,
+                country=clean_country,
                 query=keywords,
             )
             metadata["final_count"] = len(final_papers)
@@ -1874,9 +1940,15 @@ async def research_stream_endpoint(
             yield sse_event({"type": "status", "stage": "discovery_ready", "message": "Literature discovery complete. Ready for on-demand analysis."})
 
             source_breakdown = f"ArXiv: {metadata['arxiv_count']} | Semantic Scholar: {metadata['ss_count']} | OpenAlex: {metadata['openalex_count']}"
+            country_bullet = f"- **Country Filter**: Filtered to research affiliated with **{clean_country}**\n" if clean_country else ""
+            inst_bullet = f"- **University / Lab Filter**: Filtered to research affiliated with **{clean_institution}**\n" if clean_institution else ""
+            author_bullet = f"- **Author Filter**: Filtered to publications authored by **{clean_author}**\n" if clean_author else ""
             overview_summary = (
                 f"### Literature Discovery Overview\n\n"
                 f"- **Extracted Academic Keywords**: `{keywords}`\n"
+                f"{inst_bullet}"
+                f"{country_bullet}"
+                f"{author_bullet}"
                 f"- **Discovered Papers**: **{len(final_papers)}** high-signal papers retrieved and prioritized ({source_breakdown}).\n"
                 f"- **Multi-Source Repositories**: Cross-referenced ArXiv CS, Semantic Scholar, and OpenAlex.\n"
                 f"- **Sidebar Available**: All identified papers are rendered with metadata, citations, open-source code links, and PDF links in the **Discovered Papers** sidebar.\n\n"
