@@ -31,8 +31,11 @@ REQUEST_USER_AGENT = "SWMP-Labs-Research/1.0"
 
 
 def _openalex_contact() -> str:
-    """Optional contact email for the OpenAlex polite pool (OPENALEX_MAILTO env)."""
-    return (os.getenv("OPENALEX_MAILTO") or "").strip()
+    """Contact email for the OpenAlex polite pool (guarantees 10 req/s polite pool access on cloud deployments)."""
+    env_contact = (os.getenv("OPENALEX_MAILTO") or "").strip()
+    if env_contact:
+        return env_contact
+    return "research-team@swmp-labs.tech"
 
 
 def _openalex_user_agent() -> str:
@@ -51,11 +54,14 @@ def _openalex_mailto_suffix() -> str:
 
 
 def _openalex_params(base: Dict[str, Any]) -> Dict[str, Any]:
-    """Attach the mailto contact to OpenAlex query params when configured."""
+    """Attach the mailto contact and optional API key to OpenAlex query params."""
     params = dict(base)
     contact = _openalex_contact()
     if contact:
         params["mailto"] = contact
+    api_key = (os.getenv("OPENALEX_API_KEY") or "").strip()
+    if api_key:
+        params["api_key"] = api_key
     return params
 
 # ============================================================================
@@ -671,6 +677,24 @@ KNOWN_INSTITUTIONS: Dict[str, Tuple[str, str]] = {
 }
 
 # Mapping of known academic institutions to their home countries
+# Mapping of top known researchers to their primary institutional countries
+AUTHOR_COUNTRY_MAP: Dict[str, Tuple[str, str]] = {
+    "yoshua bengio": ("CA", "Canada"),
+    "bengio": ("CA", "Canada"),
+    "geoffrey hinton": ("CA", "Canada"),
+    "hinton": ("CA", "Canada"),
+    "richard sutton": ("CA", "Canada"),
+    "rich sutton": ("CA", "Canada"),
+    "sutton": ("CA", "Canada"),
+    "yann lecun": ("US", "United States"),
+    "lecun": ("US", "United States"),
+    "andrew ng": ("US", "United States"),
+    "ilya sutskever": ("US", "United States"),
+    "tri dao": ("US", "United States"),
+    "demis hassabis": ("GB", "United Kingdom"),
+    "hassabis": ("GB", "United Kingdom"),
+}
+
 INSTITUTION_COUNTRY_MAP: Dict[str, Tuple[str, str]] = {
     "mit": ("US", "United States"),
     "massachusetts institute of technology": ("US", "United States"),
@@ -975,6 +999,27 @@ def paper_matches_country(paper: Paper, target_code: Optional[str], target_name:
                     if name and name in ic_name.lower():
                         return True
 
+    # 4. Known author country mapping
+    if paper.authors:
+        for auth in paper.authors:
+            auth_clean = auth.strip().lower()
+            for known_auth, (ac_code, ac_name) in AUTHOR_COUNTRY_MAP.items():
+                if known_auth in auth_clean or auth_clean in known_auth:
+                    if code and ac_code.upper() == code:
+                        return True
+                    if name and name in ac_name.lower():
+                        return True
+
+    # 5. Abstract / Title text affiliation signal (e.g. 'University of Toronto, Canada' or 'Vector Institute')
+    text_corpus = f"{paper.title} {paper.abstract}".lower()
+    if name and len(name) >= 4:
+        if re.search(rf"\b{re.escape(name)}\b", text_corpus):
+            return True
+        for known_inst, (ic_code, ic_name) in INSTITUTION_COUNTRY_MAP.items():
+            if code and ic_code.upper() == code and len(known_inst) >= 5:
+                if re.search(rf"\b{re.escape(known_inst)}\b", text_corpus):
+                    return True
+
     return False
 
 PI_ROLE_HINT = "Lab Lead / Principal Investigator"
@@ -1191,6 +1236,8 @@ async def fetch_arxiv_papers(
     else:
         cat_clause = TARGET_ARXIV_CATEGORIES
 
+    c_code_filter, c_name_filter = resolve_country_code(country.strip()) if country and country.strip() else (None, None)
+
     # Build semantic disjunctive clause: one OR-group per concept, ANDed together.
     # e.g. intent "fast neural network training on consumer hardware" becomes
     # (all:"fast" OR all:"efficient") AND (all:"neural network training" OR ...)
@@ -1217,6 +1264,17 @@ async def fetch_arxiv_papers(
         query_parts.append(term_clause)
     if safe_author:
         query_parts.append(f'au:"{safe_author}"')
+    # Inject country terms if active so ArXiv retrieves country-affiliated publications
+    if c_name_filter or c_code_filter:
+        country_terms = []
+        if c_name_filter:
+            country_terms.append(f'all:"{c_name_filter}"')
+        for inst_k, (ic_code, _) in INSTITUTION_COUNTRY_MAP.items():
+            if c_code_filter and ic_code == c_code_filter and len(inst_k) >= 5:
+                country_terms.append(f'all:"{inst_k}"')
+        if country_terms:
+            dedup_c_terms = list(dict.fromkeys(country_terms))[:5]
+            query_parts.append("(" + " OR ".join(dedup_c_terms) + ")")
     if cat_clause:
         query_parts.append(cat_clause)
 
@@ -1827,10 +1885,10 @@ async def fetch_openalex_papers(
     resolved author/institution ID filters — no boolean keyword shredding. Empty
     intent with no filters returns [] (filter-only bypass preserved).
     Reconstructs inverted index abstracts, extracts citations, authors, institutions, and open-access PDFs.
-    Scales up to 100 papers per page.
+    Scales up to 100 papers per page. Includes automatic 429 exponential backoff and
+    polite pool header integration.
     """
     papers: List[Paper] = []
-    # Semantic intent string (natural language, phrases preserved); capped for URL safety.
     clean_kw = (keywords or "").strip()[:300]
 
     filter_parts = ["has_fulltext:true"]
@@ -1860,14 +1918,6 @@ async def fetch_openalex_papers(
     if not clean_kw and len(filter_parts) == 1:
         return papers
 
-    params = {
-        "filter": ",".join(filter_parts),
-        "select": "id,doi,title,publication_year,authorships,abstract_inverted_index,open_access,cited_by_count",
-        "per-page": min(max(limit, 5), 100),
-    }
-    if clean_kw:
-        params["search"] = clean_kw
-
     params = _openalex_params({
         "filter": ",".join(filter_parts),
         "select": "id,doi,title,publication_year,authorships,abstract_inverted_index,open_access,cited_by_count",
@@ -1881,82 +1931,101 @@ async def fetch_openalex_papers(
         "Accept": "application/json",
     }
 
-    try:
-        async with openalex_limiter:
-            response = await client.get(
-                OPENALEX_API_URL,
-                params=params,
-                headers=headers,
-                timeout=timeout
-            )
-
-        if response.status_code != 200:
-            logger.warning("OpenAlex API returned status %d: %s", response.status_code, response.text[:200])
+    response = None
+    backoff_delays = [0.6, 1.5, 3.0]
+    for attempt in range(len(backoff_delays) + 1):
+        try:
+            async with openalex_limiter:
+                response = await client.get(
+                    OPENALEX_API_URL,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout
+                )
+            if response.status_code == 429 and attempt < len(backoff_delays):
+                backoff = backoff_delays[attempt]
+                logger.warning("OpenAlex API 429 encountered. Retrying in %.1fs (attempt %d)...", backoff, attempt + 1)
+                await asyncio.sleep(backoff)
+                continue
+            break
+        except httpx.TimeoutException:
+            if attempt < len(backoff_delays):
+                await asyncio.sleep(0.5)
+                continue
+            logger.warning("OpenAlex request timed out after %.1fs.", timeout)
+            return papers
+        except Exception as e:
+            logger.warning("Error during OpenAlex fetch: %s", str(e))
             return papers
 
-        data = response.json()
-        items = data.get("results", [])
+    if not response or response.status_code != 200:
+        logger.warning("OpenAlex API returned status %s: %s", response.status_code if response else 'None', response.text[:200] if response else '')
+        return papers
 
-        for item in items:
-            title = (item.get("title") or "").strip()
-            if not title:
-                continue
+    data = response.json()
+    items = data.get("results", [])
 
-            # Authors, Institutions, Countries & PI signals
-            authors, institutions, countries, corresponding, details = _extract_openalex_authorship(
-                item.get("authorships", [])
+    # If 0 results returned with has_fulltext:true, fall back to general filter without fulltext restriction
+    if not items and "has_fulltext:true" in params.get("filter", ""):
+        relaxed_parts = [p for p in filter_parts if p != "has_fulltext:true"]
+        if relaxed_parts:
+            params_relaxed = dict(params)
+            params_relaxed["filter"] = ",".join(relaxed_parts)
+            try:
+                async with openalex_limiter:
+                    fb_resp = await client.get(OPENALEX_API_URL, params=params_relaxed, headers=headers, timeout=timeout)
+                if fb_resp.status_code == 200:
+                    items = fb_resp.json().get("results", [])
+                    logger.info("OpenAlex relaxed query yielded %d works", len(items))
+            except Exception as fb_err:
+                logger.warning("OpenAlex relaxed fallback query failed: %s", str(fb_err))
+
+    for item in items:
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+
+        authors, institutions, countries, corresponding, details = _extract_openalex_authorship(
+            item.get("authorships", [])
+        )
+        primary_country = countries[0] if countries else None
+        year = item.get("publication_year")
+        if not isinstance(year, int):
+            year = None
+
+        abstract = reconstruct_openalex_abstract(item.get("abstract_inverted_index"))
+        oa_data = item.get("open_access", {})
+        pdf_url = None
+        if isinstance(oa_data, dict) and oa_data.get("oa_url"):
+            pdf_url = oa_data.get("oa_url")
+
+        citation_count = item.get("cited_by_count")
+        raw_id = item.get("id") or ""
+        work_id = raw_id.split("/")[-1] if "/" in raw_id else raw_id
+        doi = item.get("doi")
+        canonical_url = doi or raw_id or pdf_url
+
+        papers.append(
+            Paper(
+                id=f"openalex:{work_id}" if work_id else f"openalex:{abs(hash(title))}",
+                title=title,
+                authors=authors,
+                institutions=institutions,
+                country=primary_country,
+                countries=countries,
+                year=year,
+                abstract=abstract,
+                tldr=None,
+                pdf_url=pdf_url,
+                citation_count=citation_count,
+                source="OpenAlex",
+                primary_category=None,
+                url=canonical_url,
+                code_url=None,
+                corresponding_author=corresponding,
+                author_details=details,
             )
-            primary_country = countries[0] if countries else None
-
-            # Year
-            year = item.get("publication_year")
-            if not isinstance(year, int):
-                year = None
-
-            # Abstract reconstructed from inverted index
-            abstract = reconstruct_openalex_abstract(item.get("abstract_inverted_index"))
-
-            # Open Access PDF / URL
-            oa_data = item.get("open_access", {})
-            pdf_url = None
-            if isinstance(oa_data, dict) and oa_data.get("oa_url"):
-                pdf_url = oa_data.get("oa_url")
-
-            # Citations
-            citation_count = item.get("cited_by_count")
-
-            # Paper ID & Canonical URL
-            raw_id = item.get("id") or ""
-            work_id = raw_id.split("/")[-1] if "/" in raw_id else raw_id
-            doi = item.get("doi")
-            canonical_url = doi or raw_id or pdf_url
-
-            papers.append(
-                Paper(
-                    id=f"openalex:{work_id}" if work_id else f"openalex:{abs(hash(title))}",
-                    title=title,
-                    authors=authors,
-                    institutions=institutions,
-                    country=primary_country,
-                    countries=countries,
-                    year=year,
-                    abstract=abstract,
-                    tldr=None,
-                    pdf_url=pdf_url,
-                    citation_count=citation_count,
-                    source="OpenAlex",
-                    primary_category=None,
-                    url=canonical_url,
-                    code_url=None,
-                    corresponding_author=corresponding,
-                    author_details=details,
-                )
-            )
-
-    except httpx.TimeoutException:
-        logger.warning("OpenAlex request timed out after %.1fs.", timeout)
-    except Exception as e:
-        logger.warning("Error during OpenAlex fetch: %s", str(e))
+        )
 
     return papers
 

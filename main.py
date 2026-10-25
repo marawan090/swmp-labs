@@ -1943,18 +1943,36 @@ async def research_stream_endpoint(
             country_bullet = f"- **Country Filter**: Filtered to research affiliated with **{clean_country}**\n" if clean_country else ""
             inst_bullet = f"- **University / Lab Filter**: Filtered to research affiliated with **{clean_institution}**\n" if clean_institution else ""
             author_bullet = f"- **Author Filter**: Filtered to publications authored by **{clean_author}**\n" if clean_author else ""
-            overview_summary = (
-                f"### Literature Discovery Overview\n\n"
-                f"- **Extracted Academic Keywords**: `{keywords}`\n"
-                f"{inst_bullet}"
-                f"{country_bullet}"
-                f"{author_bullet}"
-                f"- **Discovered Papers**: **{len(final_papers)}** high-signal papers retrieved and prioritized ({source_breakdown}).\n"
-                f"- **Multi-Source Repositories**: Cross-referenced ArXiv CS, Semantic Scholar, and OpenAlex.\n"
-                f"- **Sidebar Available**: All identified papers are rendered with metadata, citations, open-source code links, and PDF links in the **Discovered Papers** sidebar.\n\n"
-                f"> [!TIP]\n"
-                f"> Click **'Explain Paper with AI'** on any paper card in the sidebar to generate a focused, on-demand breakdown covering its problem statement, technical approach, research gaps, and proposed thesis extensions."
-            )
+
+            if len(final_papers) > 0:
+                overview_summary = (
+                    f"### Literature Discovery Overview\n\n"
+                    f"- **Extracted Academic Keywords**: `{keywords}`\n"
+                    f"{inst_bullet}"
+                    f"{country_bullet}"
+                    f"{author_bullet}"
+                    f"- **Discovered Papers**: **{len(final_papers)}** high-signal papers retrieved and prioritized ({source_breakdown}).\n"
+                    f"- **Multi-Source Repositories**: Cross-referenced ArXiv CS, Semantic Scholar, and OpenAlex.\n"
+                    f"- **Sidebar Available**: All identified papers are rendered with metadata, citations, open-source code links, and PDF links in the **Discovered Papers** sidebar.\n\n"
+                    f"> [!TIP]\n"
+                    f"> Click **'Explain Paper with AI'** on any paper card in the sidebar to generate a focused, on-demand breakdown covering its problem statement, technical approach, research gaps, and proposed thesis extensions."
+                )
+            else:
+                active_filter_desc = []
+                if clean_country: active_filter_desc.append(f"Country: {clean_country}")
+                if clean_institution: active_filter_desc.append(f"University: {clean_institution}")
+                if clean_author: active_filter_desc.append(f"Author: {clean_author}")
+                filter_str = ", ".join(active_filter_desc) if active_filter_desc else "active constraints"
+                overview_summary = (
+                    f"### Literature Discovery Overview\n\n"
+                    f"- **Extracted Academic Keywords**: `{keywords}`\n"
+                    f"{inst_bullet}"
+                    f"{country_bullet}"
+                    f"{author_bullet}"
+                    f"- **Discovered Papers**: **0** papers matched all strict constraints ({source_breakdown}).\n\n"
+                    f"> [!NOTE]\n"
+                    f"> None of the candidate papers from the queried repositories satisfied the strict **{filter_str}** requirement. Try broadening your keywords or removing the constraint to explore all matching literature."
+                )
             yield sse_event({"type": "token", "content": overview_summary})
 
             # Stage 6: Done
