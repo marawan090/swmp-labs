@@ -1693,6 +1693,7 @@ async def research_stream_endpoint(
     effective_ss_key = (semantic_scholar_key or runtime_config.get("semantic_scholar_api_key") or "").strip()
 
     async def event_generator():
+        nonlocal clean_author, clean_institution, clean_country
         try:
             # Check if this is an entity search (author or university/institution)
             # NOTE: 'custom' intentionally falls through to the combined topic pipeline below.

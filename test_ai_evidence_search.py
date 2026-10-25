@@ -276,6 +276,22 @@ class TestAIEvidenceSearchSystem(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(aff_res, PaperAffiliationEvidence)
         self.assertIn("United States", aff_res.countries)
 
+    def test_research_stream_scoping_and_execution(self):
+        """Ensure /api/research/stream initializes and yields SSE events without UnboundLocalError."""
+        from fastapi.testclient import TestClient
+        from main import app
+        client = TestClient(app)
+        resp = client.get('/api/research/stream?query=distributed+consensus')
+        self.assertEqual(resp.status_code, 200)
+        lines = []
+        for line in resp.iter_lines():
+            if line:
+                lines.append(line)
+                if len(lines) >= 3:
+                    break
+        self.assertGreaterEqual(len(lines), 1)
+        self.assertTrue(any("keywords" in l or "status" in l for l in lines))
+
 
 if __name__ == "__main__":
     unittest.main()
