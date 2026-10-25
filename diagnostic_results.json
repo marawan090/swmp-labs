@@ -1,0 +1,976 @@
+{
+  "query": "Cloud COmputing",
+  "country_filter": "Canada",
+  "cleaned_query": "Cloud Computing",
+  "retrieval_counts": {
+    "arxiv": 3,
+    "semantic_scholar": 0,
+    "openalex": 10,
+    "openalex_status": "success"
+  },
+  "pre_enrichment_candidates": [
+    {
+      "index": 1,
+      "source": "ArXiv",
+      "id": "arxiv:1708.01391v1",
+      "title": "On a Feedback Control-based Mechanism of Bidding for Cloud Spot Service",
+      "doi": null,
+      "authors": [
+        "Zheng Li",
+        "Maria Kihl",
+        "Anders Robertsson"
+      ],
+      "institutions": [],
+      "country": null,
+      "countries": [],
+      "country_evidence": null,
+      "country_filter_pass": false,
+      "rejection_reason": "MISSING_AFFILIATION_METADATA: Record has no institution, country, or author affiliations."
+    },
+    {
+      "index": 2,
+      "source": "ArXiv",
+      "id": "arxiv:2503.10235v2",
+      "title": "Shaved Ice: Optimal Compute Resource Commitments for Dynamic Multi-Cloud Workloads",
+      "doi": null,
+      "authors": [
+        "Murray Stokely",
+        "Neel Nadgir",
+        "Jack Peele"
+      ],
+      "institutions": [],
+      "country": null,
+      "countries": [],
+      "country_evidence": null,
+      "country_filter_pass": false,
+      "rejection_reason": "MISSING_AFFILIATION_METADATA: Record has no institution, country, or author affiliations."
+    },
+    {
+      "index": 3,
+      "source": "ArXiv",
+      "id": "arxiv:2005.12267v1",
+      "title": "Data Mining with Big Data in Intrusion Detection Systems: A Systematic Literature Review",
+      "doi": null,
+      "authors": [
+        "Fadi Salo",
+        "MohammadNoor Injadat",
+        "Ali Bou Nassif"
+      ],
+      "institutions": [],
+      "country": null,
+      "countries": [],
+      "country_evidence": null,
+      "country_filter_pass": false,
+      "rejection_reason": "MISSING_AFFILIATION_METADATA: Record has no institution, country, or author affiliations."
+    },
+    {
+      "index": 4,
+      "source": "OpenAlex",
+      "id": "openalex:W2131646073",
+      "title": "Cloud computing: state-of-the-art and research challenges",
+      "doi": "https://doi.org/10.1007/s13174-010-0007-6",
+      "authors": [
+        "Qi Zhang",
+        "Cheng Zhu Lu",
+        "Raouf Boutaba"
+      ],
+      "institutions": [
+        "University of Waterloo"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 5,
+      "source": "OpenAlex",
+      "id": "openalex:W2065783627",
+      "title": "The case for cloud computing in genome informatics",
+      "doi": "https://doi.org/10.1186/gb-2010-11-5-207",
+      "authors": [
+        "Lincoln David Stein"
+      ],
+      "institutions": [
+        "Ontario Institute for Cancer Research"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 6,
+      "source": "OpenAlex",
+      "id": "openalex:W2100320843",
+      "title": "Opportunities and Challenges of Cloud Computing to Improve Health Care Services",
+      "doi": "https://doi.org/10.2196/jmir.1867",
+      "authors": [
+        "Alex Mu-Hsing Kuo"
+      ],
+      "institutions": [
+        "University of Victoria"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 7,
+      "source": "OpenAlex",
+      "id": "openalex:W7215534945",
+      "title": "Cloud Computing",
+      "doi": null,
+      "authors": [
+        "Pratibodh - Journal Editor",
+        "Yudhishtir Mali",
+        "Vishvesh Mathur"
+      ],
+      "institutions": [
+        "Artificial Intelligence in Medicine (Canada)"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 8,
+      "source": "OpenAlex",
+      "id": "openalex:W2167895047",
+      "title": "A Study on Strategic Provisioning of Cloud Computing Services",
+      "doi": "https://doi.org/10.1155/2014/894362",
+      "authors": [
+        "Md Whaiduzzaman",
+        "Mohammad Nazmul Haque",
+        "Md Rejaul Karim Chowdhury"
+      ],
+      "institutions": [
+        "University of Malaya",
+        "University of Newcastle Australia",
+        "Western University"
+      ],
+      "country": "Malaysia",
+      "countries": [
+        "Malaysia",
+        "Australia",
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 9,
+      "source": "OpenAlex",
+      "id": "openalex:W7126153260",
+      "title": "Introduction to Cloud Computing",
+      "doi": "https://doi.org/10.1007/978-3-032-07151-4",
+      "authors": [
+        "Michael Wufka",
+        "Massimo Canonico"
+      ],
+      "institutions": [
+        "Douglas College",
+        "Universit\u00e0 degli Studi del Piemonte Orientale \u201cAmedeo Avogadro\u201d"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Italy"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 10,
+      "source": "OpenAlex",
+      "id": "openalex:W2529253071",
+      "title": "The Evolution of Cloud Computing in ATLAS",
+      "doi": "https://doi.org/10.1088/1742-6596/664/2/022038",
+      "authors": [
+        "Ryan Paul Taylor",
+        "F. Berghaus",
+        "Franco Brasolin"
+      ],
+      "institutions": [
+        "University of Victoria",
+        "Istituto Nazionale di Fisica Nucleare, Sezione di Bologna",
+        "European Organization for Nuclear Research",
+        "Brookhaven National Laboratory",
+        "Lancaster University"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Italy",
+        "Switzerland",
+        "United States",
+        "United Kingdom"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 11,
+      "source": "OpenAlex",
+      "id": "openalex:W2577108210",
+      "title": "Consolidation of cloud computing in ATLAS",
+      "doi": "https://doi.org/10.1088/1742-6596/898/5/052008",
+      "authors": [
+        "Ryan Paul Taylor",
+        "Cristovao Jose Domingues Cordeiro",
+        "Domenico Giordano"
+      ],
+      "institutions": [
+        "University of Victoria",
+        "European Organization for Nuclear Research",
+        "Brookhaven National Laboratory",
+        "Czech Academy of Sciences",
+        "Lancaster University",
+        "University of Manchester"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Switzerland",
+        "United States",
+        "Czech Republic",
+        "United Kingdom"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 12,
+      "source": "OpenAlex",
+      "id": "openalex:W2950007716",
+      "title": "Dominant resource fairness in cloud computing systems with heterogeneous servers",
+      "doi": "https://doi.org/10.1109/infocom.2014.6847983",
+      "authors": [
+        "Wei Wang",
+        "Baochun Li",
+        "Ben Liang"
+      ],
+      "institutions": [
+        "University of Toronto"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 13,
+      "source": "OpenAlex",
+      "id": "openalex:W4210298736",
+      "title": "AdPSO: Adaptive PSO-Based Task Scheduling Approach for Cloud Computing",
+      "doi": "https://doi.org/10.3390/s22030920",
+      "authors": [
+        "Said Nabi",
+        "Masroor Ahmad",
+        "Muhammad Ibrahim"
+      ],
+      "institutions": [
+        "Capital University of Science and Technology",
+        "Virtual University of Pakistan",
+        "University of Haripur",
+        "Jeju National University",
+        "Universit\u00e9 de Moncton",
+        "University of Johannesburg"
+      ],
+      "country": "Pakistan",
+      "countries": [
+        "Pakistan",
+        "South Korea",
+        "Canada",
+        "South Africa"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    }
+  ],
+  "post_enrichment_candidates": [
+    {
+      "index": 1,
+      "source": "ArXiv",
+      "id": "arxiv:1708.01391v1",
+      "title": "On a Feedback Control-based Mechanism of Bidding for Cloud Spot Service",
+      "doi": "https://doi.org/10.1109/cloudcom.2015.76",
+      "authors": [
+        "Zheng Li",
+        "Maria Kihl",
+        "Anders Robertsson"
+      ],
+      "institutions": [
+        "Lund University"
+      ],
+      "country": "Sweden",
+      "countries": [
+        "Sweden"
+      ],
+      "country_evidence": {
+        "status": "verified",
+        "confidence": 1.0,
+        "source": "openalex_enrichment",
+        "reason": "Authoritative institutional metadata enriched from OpenAlex work record.",
+        "countries": [
+          "Sweden"
+        ],
+        "primary_country": "Sweden",
+        "details": [
+          {
+            "name": "Zheng Li",
+            "position": "first",
+            "is_corresponding": false
+          },
+          {
+            "name": "Maria Kihl",
+            "position": "middle",
+            "is_corresponding": false
+          },
+          {
+            "name": "Anders Robertsson",
+            "position": "last",
+            "is_corresponding": false
+          }
+        ]
+      },
+      "country_filter_pass": false,
+      "rejection_reason": "AFFILIATION_MISMATCH: Affiliations ['Lund University'] / country Sweden do not match Canada."
+    },
+    {
+      "index": 2,
+      "source": "ArXiv",
+      "id": "arxiv:2503.10235v2",
+      "title": "Shaved Ice: Optimal Compute Resource Commitments for Dynamic Multi-Cloud Workloads",
+      "doi": "https://doi.org/10.1145/3676151.3719353",
+      "authors": [
+        "Murray Stokely",
+        "Neel Nadgir",
+        "Jack Peele"
+      ],
+      "institutions": [
+        "Snowflake Inc. (United States)"
+      ],
+      "country": "United States",
+      "countries": [
+        "United States"
+      ],
+      "country_evidence": {
+        "status": "verified",
+        "confidence": 1.0,
+        "source": "openalex_enrichment",
+        "reason": "Authoritative institutional metadata enriched from OpenAlex work record.",
+        "countries": [
+          "United States"
+        ],
+        "primary_country": "United States",
+        "details": [
+          {
+            "name": "Murray Stokely",
+            "position": "first",
+            "is_corresponding": false
+          },
+          {
+            "name": "Neel Nadgir",
+            "position": "middle",
+            "is_corresponding": false
+          },
+          {
+            "name": "Jack Peele",
+            "position": "middle",
+            "is_corresponding": false
+          },
+          {
+            "name": "Orestis Kostakis",
+            "position": "last",
+            "is_corresponding": false
+          }
+        ]
+      },
+      "country_filter_pass": false,
+      "rejection_reason": "AFFILIATION_MISMATCH: Affiliations ['Snowflake Inc. (United States)'] / country United States do not match Canada."
+    },
+    {
+      "index": 3,
+      "source": "ArXiv",
+      "id": "arxiv:2005.12267v1",
+      "title": "Data Mining with Big Data in Intrusion Detection Systems: A Systematic Literature Review",
+      "doi": "https://doi.org/10.48550/arxiv.2005.12267",
+      "authors": [
+        "Fadi Salo",
+        "MohammadNoor Injadat",
+        "Ali Bou Nassif"
+      ],
+      "institutions": [
+        "Western University",
+        "University of Sharjah"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "United Arab Emirates"
+      ],
+      "country_evidence": {
+        "status": "verified",
+        "confidence": 1.0,
+        "source": "openalex_enrichment",
+        "reason": "Authoritative institutional metadata enriched from OpenAlex work record.",
+        "countries": [
+          "Canada",
+          "United Arab Emirates"
+        ],
+        "primary_country": "Canada",
+        "details": [
+          {
+            "name": "Fadi Salo",
+            "position": "first",
+            "is_corresponding": false
+          },
+          {
+            "name": "MohammadNoor Injadat",
+            "position": "middle",
+            "is_corresponding": false
+          },
+          {
+            "name": "Ali Bou Nassif",
+            "position": "middle",
+            "is_corresponding": false
+          },
+          {
+            "name": "Aleksander Essex",
+            "position": "last",
+            "is_corresponding": false
+          }
+        ]
+      },
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 4,
+      "source": "OpenAlex",
+      "id": "openalex:W2131646073",
+      "title": "Cloud computing: state-of-the-art and research challenges",
+      "doi": "https://doi.org/10.1007/s13174-010-0007-6",
+      "authors": [
+        "Qi Zhang",
+        "Cheng Zhu Lu",
+        "Raouf Boutaba"
+      ],
+      "institutions": [
+        "University of Waterloo"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 5,
+      "source": "OpenAlex",
+      "id": "openalex:W2065783627",
+      "title": "The case for cloud computing in genome informatics",
+      "doi": "https://doi.org/10.1186/gb-2010-11-5-207",
+      "authors": [
+        "Lincoln David Stein"
+      ],
+      "institutions": [
+        "Ontario Institute for Cancer Research"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 6,
+      "source": "OpenAlex",
+      "id": "openalex:W2100320843",
+      "title": "Opportunities and Challenges of Cloud Computing to Improve Health Care Services",
+      "doi": "https://doi.org/10.2196/jmir.1867",
+      "authors": [
+        "Alex Mu-Hsing Kuo"
+      ],
+      "institutions": [
+        "University of Victoria"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 7,
+      "source": "OpenAlex",
+      "id": "openalex:W7215534945",
+      "title": "Cloud Computing",
+      "doi": null,
+      "authors": [
+        "Pratibodh - Journal Editor",
+        "Yudhishtir Mali",
+        "Vishvesh Mathur"
+      ],
+      "institutions": [
+        "Artificial Intelligence in Medicine (Canada)"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 8,
+      "source": "OpenAlex",
+      "id": "openalex:W2167895047",
+      "title": "A Study on Strategic Provisioning of Cloud Computing Services",
+      "doi": "https://doi.org/10.1155/2014/894362",
+      "authors": [
+        "Md Whaiduzzaman",
+        "Mohammad Nazmul Haque",
+        "Md Rejaul Karim Chowdhury"
+      ],
+      "institutions": [
+        "University of Malaya",
+        "University of Newcastle Australia",
+        "Western University"
+      ],
+      "country": "Malaysia",
+      "countries": [
+        "Malaysia",
+        "Australia",
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 9,
+      "source": "OpenAlex",
+      "id": "openalex:W7126153260",
+      "title": "Introduction to Cloud Computing",
+      "doi": "https://doi.org/10.1007/978-3-032-07151-4",
+      "authors": [
+        "Michael Wufka",
+        "Massimo Canonico"
+      ],
+      "institutions": [
+        "Douglas College",
+        "Universit\u00e0 degli Studi del Piemonte Orientale \u201cAmedeo Avogadro\u201d"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Italy"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 10,
+      "source": "OpenAlex",
+      "id": "openalex:W2529253071",
+      "title": "The Evolution of Cloud Computing in ATLAS",
+      "doi": "https://doi.org/10.1088/1742-6596/664/2/022038",
+      "authors": [
+        "Ryan Paul Taylor",
+        "F. Berghaus",
+        "Franco Brasolin"
+      ],
+      "institutions": [
+        "University of Victoria",
+        "Istituto Nazionale di Fisica Nucleare, Sezione di Bologna",
+        "European Organization for Nuclear Research",
+        "Brookhaven National Laboratory",
+        "Lancaster University"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Italy",
+        "Switzerland",
+        "United States",
+        "United Kingdom"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 11,
+      "source": "OpenAlex",
+      "id": "openalex:W2577108210",
+      "title": "Consolidation of cloud computing in ATLAS",
+      "doi": "https://doi.org/10.1088/1742-6596/898/5/052008",
+      "authors": [
+        "Ryan Paul Taylor",
+        "Cristovao Jose Domingues Cordeiro",
+        "Domenico Giordano"
+      ],
+      "institutions": [
+        "University of Victoria",
+        "European Organization for Nuclear Research",
+        "Brookhaven National Laboratory",
+        "Czech Academy of Sciences",
+        "Lancaster University",
+        "University of Manchester"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Switzerland",
+        "United States",
+        "Czech Republic",
+        "United Kingdom"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 12,
+      "source": "OpenAlex",
+      "id": "openalex:W2950007716",
+      "title": "Dominant resource fairness in cloud computing systems with heterogeneous servers",
+      "doi": "https://doi.org/10.1109/infocom.2014.6847983",
+      "authors": [
+        "Wei Wang",
+        "Baochun Li",
+        "Ben Liang"
+      ],
+      "institutions": [
+        "University of Toronto"
+      ],
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    },
+    {
+      "index": 13,
+      "source": "OpenAlex",
+      "id": "openalex:W4210298736",
+      "title": "AdPSO: Adaptive PSO-Based Task Scheduling Approach for Cloud Computing",
+      "doi": "https://doi.org/10.3390/s22030920",
+      "authors": [
+        "Said Nabi",
+        "Masroor Ahmad",
+        "Muhammad Ibrahim"
+      ],
+      "institutions": [
+        "Capital University of Science and Technology",
+        "Virtual University of Pakistan",
+        "University of Haripur",
+        "Jeju National University",
+        "Universit\u00e9 de Moncton",
+        "University of Johannesburg"
+      ],
+      "country": "Pakistan",
+      "countries": [
+        "Pakistan",
+        "South Korea",
+        "Canada",
+        "South Africa"
+      ],
+      "country_evidence": null,
+      "country_filter_pass": true,
+      "rejection_reason": "NONE (PASSED)"
+    }
+  ],
+  "final_matching_papers_count": 10,
+  "final_matching_papers": [
+    {
+      "title": "Cloud Computing",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "institutions": [
+        "Artificial Intelligence in Medicine (Canada)"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada.",
+        "is_collaboration": false
+      }
+    },
+    {
+      "title": "Consolidation of cloud computing in ATLAS",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Switzerland",
+        "United States",
+        "Czech Republic",
+        "United Kingdom"
+      ],
+      "institutions": [
+        "University of Victoria",
+        "European Organization for Nuclear Research",
+        "Brookhaven National Laboratory",
+        "Czech Academy of Sciences",
+        "Lancaster University",
+        "University of Manchester"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada",
+          "Switzerland",
+          "United States",
+          "Czech Republic",
+          "United Kingdom"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada, Switzerland, United States, Czech Republic, United Kingdom.",
+        "is_collaboration": true
+      }
+    },
+    {
+      "title": "The Evolution of Cloud Computing in ATLAS",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Italy",
+        "Switzerland",
+        "United States",
+        "United Kingdom"
+      ],
+      "institutions": [
+        "University of Victoria",
+        "Istituto Nazionale di Fisica Nucleare, Sezione di Bologna",
+        "European Organization for Nuclear Research",
+        "Brookhaven National Laboratory",
+        "Lancaster University"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada",
+          "Italy",
+          "Switzerland",
+          "United States",
+          "United Kingdom"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada, Italy, Switzerland, United States, United Kingdom.",
+        "is_collaboration": true
+      }
+    },
+    {
+      "title": "Cloud computing: state-of-the-art and research challenges",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "institutions": [
+        "University of Waterloo"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada.",
+        "is_collaboration": false
+      }
+    },
+    {
+      "title": "Opportunities and Challenges of Cloud Computing to Improve Health Care Services",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "institutions": [
+        "University of Victoria"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada.",
+        "is_collaboration": false
+      }
+    },
+    {
+      "title": "A Study on Strategic Provisioning of Cloud Computing Services",
+      "source": "OpenAlex",
+      "country": "Malaysia",
+      "countries": [
+        "Malaysia",
+        "Australia",
+        "Canada"
+      ],
+      "institutions": [
+        "University of Malaya",
+        "University of Newcastle Australia",
+        "Western University"
+      ],
+      "evidence": {
+        "country": "Malaysia",
+        "countries": [
+          "Malaysia",
+          "Australia",
+          "Canada"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Malaysia, Australia, Canada.",
+        "is_collaboration": true
+      }
+    },
+    {
+      "title": "The case for cloud computing in genome informatics",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "institutions": [
+        "Ontario Institute for Cancer Research"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada.",
+        "is_collaboration": false
+      }
+    },
+    {
+      "title": "Dominant resource fairness in cloud computing systems with heterogeneous servers",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada"
+      ],
+      "institutions": [
+        "University of Toronto"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada.",
+        "is_collaboration": false
+      }
+    },
+    {
+      "title": "AdPSO: Adaptive PSO-Based Task Scheduling Approach for Cloud Computing",
+      "source": "OpenAlex",
+      "country": "Pakistan",
+      "countries": [
+        "Pakistan",
+        "South Korea",
+        "Canada",
+        "South Africa"
+      ],
+      "institutions": [
+        "Capital University of Science and Technology",
+        "Virtual University of Pakistan",
+        "University of Haripur",
+        "Jeju National University",
+        "Universit\u00e9 de Moncton",
+        "University of Johannesburg"
+      ],
+      "evidence": {
+        "country": "Pakistan",
+        "countries": [
+          "Pakistan",
+          "South Korea",
+          "Canada",
+          "South Africa"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Pakistan, South Korea, Canada, South Africa.",
+        "is_collaboration": true
+      }
+    },
+    {
+      "title": "Introduction to Cloud Computing",
+      "source": "OpenAlex",
+      "country": "Canada",
+      "countries": [
+        "Canada",
+        "Italy"
+      ],
+      "institutions": [
+        "Douglas College",
+        "Universit\u00e0 degli Studi del Piemonte Orientale \u201cAmedeo Avogadro\u201d"
+      ],
+      "evidence": {
+        "country": "Canada",
+        "countries": [
+          "Canada",
+          "Italy"
+        ],
+        "status": "verified",
+        "confidence": 1.0,
+        "reasoning": "Verified from structured institutional metadata: Canada, Italy.",
+        "is_collaboration": true
+      }
+    }
+  ]
+}

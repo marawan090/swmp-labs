@@ -29,6 +29,7 @@ from services.search import (
     clean_academic_query,
     deduplicate_and_rank,
     discover_paper_code_urls,
+    enrich_candidate_affiliations,
     expand_semantic_concepts,
     fetch_arxiv_papers,
     fetch_entity_papers,
@@ -1770,7 +1771,10 @@ async def research_stream_endpoint(
             # Topic / Custom Combined Exploration Pipeline (multi-field query builder)
             # 'topic' = standalone topic; 'custom' = topic + author + institution combined.
             cache_key = f"{clean_query}|author:{clean_author or ''}|inst:{clean_institution or ''}|country:{clean_country or ''}|k:{limit}"
-            cached_entry = search_cache.get(cache_key) or search_cache.get(clean_query)
+            has_active_filters = bool(clean_author or clean_institution or clean_country)
+            cached_entry = search_cache.get(cache_key)
+            if cached_entry is None and not has_active_filters:
+                cached_entry = search_cache.get(clean_query)
             if cached_entry is not None:
                 cached_papers, cached_meta = cached_entry
                 selected_papers = cached_papers[:limit]
@@ -1888,6 +1892,7 @@ async def research_stream_endpoint(
             fetch_quota = min(max(limit, 10), 100)
             client = get_shared_http_client()
 
+            openalex_status_tracker: Dict[str, Any] = {}
             arxiv_task = fetch_arxiv_papers(keywords, client, max_results=fetch_quota, author=clean_author, country=clean_country)
             ss_task = fetch_semantic_scholar_papers(
                 keywords,
@@ -1896,7 +1901,15 @@ async def research_stream_endpoint(
                 limit=fetch_quota,
                 country=clean_country
             )
-            openalex_task = fetch_openalex_papers(keywords, client, limit=fetch_quota, author=clean_author, institution=clean_institution, country=clean_country)
+            openalex_task = fetch_openalex_papers(
+                keywords,
+                client,
+                limit=fetch_quota,
+                author=clean_author,
+                institution=clean_institution,
+                country=clean_country,
+                status_tracker=openalex_status_tracker
+            )
 
             results = await asyncio.gather(arxiv_task, ss_task, openalex_task, return_exceptions=True)
 
@@ -1931,11 +1944,26 @@ async def research_stream_endpoint(
             else:
                 openalex_papers = results[2]
                 metadata["openalex_count"] = len(openalex_papers)
-                metadata["openalex_status"] = "success" if openalex_papers else "empty"
+                oa_reported_status = openalex_status_tracker.get("status")
+                if oa_reported_status in ("rate_limited", "timed_out", "failed"):
+                    metadata["openalex_status"] = oa_reported_status
+                    if openalex_status_tracker.get("error"):
+                        metadata["errors"].append(openalex_status_tracker["error"])
+                else:
+                    metadata["openalex_status"] = "success" if openalex_papers else "empty"
 
-            # Stage 3: Discover code and deduplicate
-            yield sse_event({"type": "status", "stage": "discovering_code", "message": "Scanning repositories and discoverable code implementations..."})
+            if metadata["openalex_status"] in ("rate_limited", "timed_out"):
+                yield sse_event({
+                    "type": "status",
+                    "stage": "openalex_notice",
+                    "message": f"OpenAlex index notice: {metadata['openalex_status'].replace('_', ' ').title()}. Cross-source enrichment active for candidate papers."
+                })
+                await asyncio.sleep(0.04)
+
+            # Stage 3: Cross-source affiliation enrichment & code discovery
+            yield sse_event({"type": "status", "stage": "enriching_affiliations", "message": "Cross-referencing candidate affiliations against authoritative academic records..."})
             all_candidates = arxiv_papers + ss_papers + openalex_papers
+            await enrich_candidate_affiliations(all_candidates, client)
             await discover_paper_code_urls(all_candidates, client)
 
             yield sse_event({"type": "status", "stage": "deduplicating", "message": f"Deduplicating across {len(arxiv_papers)} ArXiv, {len(ss_papers)} Semantic Scholar, and {len(openalex_papers)} OpenAlex papers..."})
@@ -1992,6 +2020,10 @@ async def research_stream_endpoint(
                 if clean_institution: active_filter_desc.append(f"University: {clean_institution}")
                 if clean_author: active_filter_desc.append(f"Author: {clean_author}")
                 filter_str = ", ".join(active_filter_desc) if active_filter_desc else "active constraints"
+                oa_notice = ""
+                if metadata.get("openalex_status") in ("rate_limited", "timed_out"):
+                    oa_notice = f"\n\n> [!WARNING]\n> **External Index Notice**: The OpenAlex academic index encountered a temporary {metadata['openalex_status'].replace('_', ' ')} during this search. Candidate papers from ArXiv and Semantic Scholar were cross-checked for verified affiliations."
+
                 overview_summary = (
                     f"### Literature Discovery Overview\n\n"
                     f"- **Extracted Academic Keywords**: `{keywords}`\n"
@@ -2000,7 +2032,7 @@ async def research_stream_endpoint(
                     f"{author_bullet}"
                     f"- **Discovered Papers**: **0** papers matched all strict constraints ({source_breakdown}).\n\n"
                     f"> [!NOTE]\n"
-                    f"> None of the candidate papers from the queried repositories satisfied the strict **{filter_str}** requirement. Try broadening your keywords or removing the constraint to explore all matching literature."
+                    f"> None of the candidate papers from the queried repositories satisfied the strict **{filter_str}** requirement. Try broadening your keywords or removing the constraint to explore all matching literature.{oa_notice}"
                 )
             yield sse_event({"type": "token", "content": overview_summary})
 

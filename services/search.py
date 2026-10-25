@@ -477,6 +477,7 @@ class Paper(BaseModel):
     source: str = "Unknown"  # "ArXiv", "Semantic Scholar", "OpenAlex", "ArXiv & OpenAlex", etc.
     primary_category: Optional[str] = None
     url: Optional[str] = None
+    doi: Optional[str] = None
     code_url: Optional[str] = None
     # PI-detection signals (populated by OpenAlex parsers; empty for ArXiv/SS).
     # author_details aligns positionally with `authors`:
@@ -678,6 +679,27 @@ KNOWN_INSTITUTIONS: Dict[str, Tuple[str, str]] = {
     "yale university": ("I32971472", "Yale University"),
     "nyu": ("I57206974", "New York University"),
     "new york university": ("I57206974", "New York University"),
+    "york university": ("I125557451", "York University"),
+    "university of york": ("I165779595", "University of York"),
+    "western university": ("I114027177", "Western University"),
+    "university of western ontario": ("I114027177", "Western University"),
+    "uwo": ("I114027177", "Western University"),
+    "university of victoria": ("I141945490", "University of Victoria"),
+    "uvic": ("I141945490", "University of Victoria"),
+    "simon fraser university": ("I19246387", "Simon Fraser University"),
+    "sfu": ("I19246387", "Simon Fraser University"),
+    "mcmaster university": ("I98251732", "McMaster University"),
+    "mcmaster": ("I98251732", "McMaster University"),
+    "queen's university": ("I14588479", "Queen's University"),
+    "queens university": ("I14588479", "Queen's University"),
+    "university of calgary": ("I168635309", "University of Calgary"),
+    "university of ottawa": ("I14226107", "University of Ottawa"),
+    "dalhousie university": ("I136449830", "Dalhousie University"),
+    "ontario institute for cancer research": ("I2802283804", "Ontario Institute for Cancer Research"),
+    "oicr": ("I2802283804", "Ontario Institute for Cancer Research"),
+    "douglas college": ("I180017321", "Douglas College"),
+    "université de moncton": ("I147814674", "Université de Moncton"),
+    "universite de moncton": ("I147814674", "Université de Moncton"),
 }
 
 # Mapping of known academic institutions to their home countries
@@ -767,6 +789,27 @@ INSTITUTION_COUNTRY_MAP: Dict[str, Tuple[str, str]] = {
     "national university of singapore": ("SG", "Singapore"),
     "ntu": ("SG", "Singapore"),
     "nanyang technological university": ("SG", "Singapore"),
+    "york university": ("CA", "Canada"),
+    "university of york": ("GB", "United Kingdom"),
+    "western university": ("CA", "Canada"),
+    "university of western ontario": ("CA", "Canada"),
+    "uwo": ("CA", "Canada"),
+    "university of victoria": ("CA", "Canada"),
+    "uvic": ("CA", "Canada"),
+    "simon fraser university": ("CA", "Canada"),
+    "sfu": ("CA", "Canada"),
+    "mcmaster university": ("CA", "Canada"),
+    "mcmaster": ("CA", "Canada"),
+    "queen's university": ("CA", "Canada"),
+    "queens university": ("CA", "Canada"),
+    "university of calgary": ("CA", "Canada"),
+    "university of ottawa": ("CA", "Canada"),
+    "dalhousie university": ("CA", "Canada"),
+    "ontario institute for cancer research": ("CA", "Canada"),
+    "oicr": ("CA", "Canada"),
+    "douglas college": ("CA", "Canada"),
+    "université de moncton": ("CA", "Canada"),
+    "universite de moncton": ("CA", "Canada"),
 }
 
 # Comprehensive synonyms, abbreviations, and canonical variants for top universities
@@ -828,6 +871,25 @@ INSTITUTION_ALIASES: Dict[str, List[str]] = {
     "peking": ["peking university", "peking"],
     "nus": ["national university of singapore", "nus"],
     "ntu": ["nanyang technological university", "ntu"],
+    "york university": ["york university", "york u"],
+    "university of york": ["university of york", "uoy", "york uni"],
+    "western university": ["western university", "university of western ontario", "uwo"],
+    "university of western ontario": ["western university", "university of western ontario", "uwo"],
+    "uwo": ["western university", "university of western ontario", "uwo"],
+    "university of victoria": ["university of victoria", "uvic"],
+    "uvic": ["university of victoria", "uvic"],
+    "simon fraser university": ["simon fraser university", "sfu"],
+    "sfu": ["simon fraser university", "sfu"],
+    "mcmaster university": ["mcmaster university", "mcmaster"],
+    "mcmaster": ["mcmaster university", "mcmaster"],
+    "queen's university": ["queen's university", "queens university", "queens"],
+    "queens university": ["queen's university", "queens university", "queens"],
+    "university of calgary": ["university of calgary", "ucalgary"],
+    "ucalgary": ["university of calgary", "ucalgary"],
+    "university of ottawa": ["university of ottawa", "uottawa"],
+    "uottawa": ["university of ottawa", "uottawa"],
+    "dalhousie university": ["dalhousie university", "dal"],
+    "dalhousie": ["dalhousie university", "dal"],
 }
 
 
@@ -886,12 +948,27 @@ def paper_matches_institution(
     # Token-level keywords of target
     target_tokens = [w for w in target_norm.split() if w not in INSTITUTION_STOPWORDS]
 
+    # Explicit institutional disambiguation: York University (Canada) vs University of York (UK)
+    YORK_CA_VARIANTS = {"york university", "york u"}
+    YORK_UK_VARIANTS = {"university of york", "uoy"}
+
     for inst in paper.institutions:
         if not inst:
             continue
         inst_clean = inst.strip().lower()
         inst_norm = normalize_institution_str(inst)
         inst_tokens = set(inst_norm.split())
+
+        # Disambiguate York University vs University of York using word boundaries
+        target_is_ca = any(re.search(rf"\b{re.escape(y)}\b", target_norm) for y in YORK_CA_VARIANTS)
+        target_is_uk = any(re.search(rf"\b{re.escape(y)}\b", target_norm) for y in YORK_UK_VARIANTS)
+        inst_is_ca = any(re.search(rf"\b{re.escape(y)}\b", inst_norm) for y in YORK_CA_VARIANTS)
+        inst_is_uk = any(re.search(rf"\b{re.escape(y)}\b", inst_norm) for y in YORK_UK_VARIANTS)
+
+        if target_is_ca and inst_is_uk and not inst_is_ca:
+            continue
+        if target_is_uk and inst_is_ca and not inst_is_uk:
+            continue
 
         for cand in cands:
             if not cand:
@@ -1142,6 +1219,37 @@ def detect_likely_pi(
     }
 
 
+def fix_query_casing_typos(text: str) -> str:
+    """
+    Normalize accidental casing typos like 'COmputing' -> 'Computing' or 'cLoUd' -> 'Cloud'
+    while preserving recognized academic and tech acronyms (e.g. AI, LLM, BERT, GPU).
+    """
+    if not text:
+        return ""
+    ACRONYMS = {
+        "AI", "ML", "NLP", "LLM", "LLMS", "RL", "CNN", "RNN", "GAN", "GNN", "BERT", "GPT",
+        "GPU", "GPUS", "CPU", "CPUS", "TPU", "FPGA", "ASIC", "RAM", "SSD", "HDD",
+        "API", "APIS", "REST", "RPC", "HTTP", "HTTPS", "TCP", "IP", "UDP", "DNS", "BFT",
+        "IOT", "RFID", "UAV", "UAVS", "VR", "AR", "XR", "SLAM",
+        "DNA", "RNA", "CRISPR", "COVID", "SARS", "MRI", "CT", "ECG", "EEG",
+        "USA", "US", "UK", "EU", "UN", "NATO", "IEEE", "ACM", "MIT", "CMU", "ETH", "UCLA", "UCB"
+    }
+    tokens = text.split()
+    fixed_tokens = []
+    for token in tokens:
+        core = token.strip(".,;:!?()[]\"'")
+        if core.upper() in ACRONYMS:
+            fixed_tokens.append(token)
+            continue
+        # Mixed irregular casing like 'COmputing' or 'cLoUd'
+        if len(core) >= 3 and not core.isupper() and not core.islower() and not core.istitle():
+            repl = core.capitalize()
+            fixed_tokens.append(token.replace(core, repl))
+        else:
+            fixed_tokens.append(token)
+    return " ".join(fixed_tokens)
+
+
 def clean_academic_query(raw_query: str) -> str:
     """
     Semantic intent normalization (replaces rigid keyword-bag extraction).
@@ -1198,7 +1306,8 @@ def clean_academic_query(raw_query: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     if not cleaned:
-        return raw_query.strip()[:500]
+        cleaned = raw_query.strip()
+    cleaned = fix_query_casing_typos(cleaned)
     return cleaned[:500]
 
 
@@ -1517,7 +1626,7 @@ async def fetch_semantic_scholar_papers(
         for current_query in queries_to_try:
             params = {
                 "query": current_query,
-                "fields": "title,authors,year,abstract,tldr,openAccessPdf,citationCount,url",
+                "fields": "title,authors.name,authors.affiliations,year,abstract,tldr,openAccessPdf,citationCount,url,externalIds",
                 "limit": limit,
             }
 
@@ -1584,9 +1693,30 @@ async def fetch_semantic_scholar_papers(
             if not title:
                 continue
 
-            # Authors
+            # Authors & Affiliations
             raw_authors = item.get("authors", [])
-            authors = [a.get("name", "") for a in raw_authors if isinstance(a, dict) and a.get("name")]
+            authors = []
+            affiliations = []
+            for a in raw_authors:
+                if isinstance(a, dict):
+                    name = (a.get("name") or "").strip()
+                    if name:
+                        authors.append(name)
+                    for aff in a.get("affiliations", []):
+                        if isinstance(aff, str) and aff.strip() and aff.strip() not in affiliations:
+                            affiliations.append(aff.strip())
+
+            # Detect countries from affiliations
+            ss_countries = []
+            for aff in affiliations:
+                for dc in detect_country_from_text(aff):
+                    if dc not in ss_countries:
+                        ss_countries.append(dc)
+            primary_country = ss_countries[0] if ss_countries else None
+
+            # External IDs (DOI)
+            ext_ids = item.get("externalIds") or {}
+            doi = ext_ids.get("DOI") if isinstance(ext_ids, dict) else None
 
             # Year
             year = item.get("year")
@@ -1620,6 +1750,10 @@ async def fetch_semantic_scholar_papers(
                     id=f"ss:{paper_id}" if paper_id else f"ss:{abs(hash(title))}",
                     title=title,
                     authors=authors,
+                    institutions=affiliations,
+                    country=primary_country,
+                    countries=ss_countries,
+                    doi=doi,
                     year=year,
                     abstract=abstract,
                     tldr=tldr,
@@ -1900,7 +2034,8 @@ async def fetch_openalex_papers(
     timeout: float = 12.0,
     author: Optional[str] = None,
     institution: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    status_tracker: Optional[Dict[str, Any]] = None
 ) -> List[Paper]:
     """
     Fetch academic papers from OpenAlex works endpoint with has_fulltext:true.
@@ -1977,13 +2112,26 @@ async def fetch_openalex_papers(
                 await asyncio.sleep(0.5)
                 continue
             logger.warning("OpenAlex request timed out after %.1fs.", timeout)
+            if status_tracker is not None:
+                status_tracker["status"] = "timed_out"
+                status_tracker["error"] = f"OpenAlex timed out after {timeout:.1f}s"
             return papers
         except Exception as e:
             logger.warning("Error during OpenAlex fetch: %s", str(e))
+            if status_tracker is not None:
+                status_tracker["status"] = "failed"
+                status_tracker["error"] = f"OpenAlex error: {str(e)}"
             return papers
 
     if not response or response.status_code != 200:
         logger.warning("OpenAlex API returned status %s: %s", response.status_code if response else 'None', response.text[:200] if response else '')
+        if status_tracker is not None:
+            if response and response.status_code == 429:
+                status_tracker["status"] = "rate_limited"
+                status_tracker["error"] = "OpenAlex API rate limit (HTTP 429)"
+            else:
+                status_tracker["status"] = "failed"
+                status_tracker["error"] = f"OpenAlex HTTP {response.status_code if response else 'No response'}"
         return papers
 
     data = response.json()
@@ -2003,6 +2151,9 @@ async def fetch_openalex_papers(
                     logger.info("OpenAlex relaxed query yielded %d works", len(items))
             except Exception as fb_err:
                 logger.warning("OpenAlex relaxed fallback query failed: %s", str(fb_err))
+
+    if status_tracker is not None:
+        status_tracker["status"] = "success" if items else "empty"
 
     for item in items:
         title = (item.get("title") or "").strip()
@@ -2045,6 +2196,7 @@ async def fetch_openalex_papers(
                 source="OpenAlex",
                 primary_category=None,
                 url=canonical_url,
+                doi=doi,
                 code_url=None,
                 corresponding_author=corresponding,
                 author_details=details,
@@ -2380,6 +2532,94 @@ async def discover_paper_code_urls(
         await asyncio.gather(*lookup_tasks, return_exceptions=True)
 
 
+async def enrich_candidate_affiliations(
+    papers: List[Paper],
+    client: httpx.AsyncClient,
+    max_enrich: int = 15,
+    timeout: float = 6.0
+) -> List[Paper]:
+    """
+    Enrich candidate papers that lack institutional affiliations (e.g. from ArXiv XML
+    or Semantic Scholar) by cross-referencing against OpenAlex work records by DOI or title.
+    Attaches authoritative authorships, institutions, countries, and country evidence.
+    """
+    to_enrich = [
+        p for p in papers
+        if not p.institutions and not p.country and not p.countries
+    ][:max_enrich]
+
+    if not to_enrich:
+        return papers
+
+    headers = {
+        "User-Agent": _openalex_user_agent(),
+        "Accept": "application/json",
+    }
+
+    async def _enrich_single(p: Paper):
+        try:
+            matched_item = None
+            # 1. Try DOI lookup if available
+            if p.doi:
+                clean_doi = p.doi.strip()
+                if clean_doi.startswith("10."):
+                    url = f"{OPENALEX_API_URL}/https://doi.org/{clean_doi}"
+                elif "doi.org" in clean_doi:
+                    url = f"{OPENALEX_API_URL}/{clean_doi}"
+                else:
+                    url = f"{OPENALEX_API_URL}/https://doi.org/{clean_doi}"
+                params = _openalex_params({})
+                async with openalex_limiter:
+                    resp = await client.get(url, params=params, headers=headers, timeout=timeout)
+                if resp.status_code == 200:
+                    matched_item = resp.json()
+
+            # 2. Try Title search if DOI not available or not found
+            if not matched_item and p.title:
+                clean_t = re.sub(r"[^\w\s]", " ", p.title).strip()
+                if len(clean_t) >= 10:
+                    params = _openalex_params({
+                        "search": clean_t,
+                        "per-page": 1,
+                        "select": "id,doi,title,authorships"
+                    })
+                    async with openalex_limiter:
+                        resp = await client.get(OPENALEX_API_URL, params=params, headers=headers, timeout=timeout)
+                    if resp.status_code == 200:
+                        results = resp.json().get("results", [])
+                        if results:
+                            cand = results[0]
+                            cand_title = cand.get("title") or ""
+                            if title_similarity(cand_title, p.title) >= 0.80:
+                                matched_item = cand
+
+            if matched_item:
+                authors, institutions, countries, _, details = _extract_openalex_authorship(
+                    matched_item.get("authorships", [])
+                )
+                if institutions or countries:
+                    p.institutions = institutions
+                    p.countries = countries
+                    p.country = countries[0] if countries else None
+                    if not p.doi and matched_item.get("doi"):
+                        p.doi = matched_item.get("doi")
+                    p.country_evidence = {
+                        "status": "verified",
+                        "confidence": 1.0,
+                        "source": "openalex_enrichment",
+                        "reason": "Authoritative institutional metadata enriched from OpenAlex work record.",
+                        "countries": countries,
+                        "primary_country": p.country,
+                        "details": details
+                    }
+                    logger.info("Enriched paper %r with institutions: %s, countries: %s", p.title[:40], institutions, countries)
+        except Exception as e:
+            logger.debug("Failed to enrich paper %r: %s", p.title[:30], str(e))
+
+    await asyncio.gather(*[_enrich_single(p) for p in to_enrich], return_exceptions=True)
+    return papers
+
+
 def deduplicate_and_rank(
     arxiv_papers: Optional[List[Paper]] = None,
     ss_papers: Optional[List[Paper]] = None,
@@ -2709,8 +2949,9 @@ async def search_academic_papers(
         metadata["openalex_count"] = len(openalex_papers)
         metadata["openalex_status"] = "success" if openalex_papers else "empty"
 
-    # Discover code repository URLs for all candidates
+    # Cross-source affiliation enrichment & code discovery for candidates
     all_candidates = arxiv_papers + ss_papers + openalex_papers
+    await enrich_candidate_affiliations(all_candidates, http_client)
     await discover_paper_code_urls(all_candidates, http_client)
 
     # Deduplicate, merge metadata, apply semantic re-ranking, take top k
