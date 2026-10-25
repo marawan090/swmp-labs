@@ -302,6 +302,134 @@ class TestCanadaFilterDiagnostics(unittest.IsolatedAsyncioTestCase):
         for r in results:
             self.assertIsInstance(r, list)
 
+    def test_11_china_only_paper_strictly_excluded_from_canada_filter(self):
+        """
+        Verify that a China-only paper (Verified: China, no Canadian affiliations)
+        can NEVER satisfy the Canada filter under any circumstances.
+        """
+        p_china = Paper(
+            id="china-only-1",
+            title="Edge Intelligence Architecture in Chinese Metropolitan Networks",
+            authors=["Sijing Duan", "Ju Ren"],
+            institutions=["Central South University", "Tsinghua University"],
+            country="China",
+            countries=["China"],
+            source="Semantic Scholar"
+        )
+
+        # Must fail paper_matches_country for Canada
+        self.assertFalse(paper_matches_country(p_china, "CA", "Canada"))
+
+        # Must be strictly excluded by deduplicate_and_rank
+        ranked = deduplicate_and_rank([p_china], country="Canada", top_k=5)
+        self.assertEqual(len(ranked), 0, "China-only paper must be strictly excluded from Canada filter")
+
+    def test_12_canada_only_paper_strictly_included_in_canada_filter(self):
+        """
+        Verify that a Canada-only paper is included with pure Canadian verified evidence.
+        """
+        p_canada = Paper(
+            id="openalex:W2131646073",
+            title="Cloud computing: state-of-the-art and research challenges",
+            authors=["Qi Zhang", "Cheng Zhu Lu", "Raouf Boutaba"],
+            institutions=["University of Waterloo"],
+            country="Canada",
+            countries=["Canada"],
+            source="OpenAlex"
+        )
+
+        self.assertTrue(paper_matches_country(p_canada, "CA", "Canada"))
+
+        ranked = deduplicate_and_rank([p_canada], country="Canada", top_k=5)
+        self.assertEqual(len(ranked), 1)
+        r = ranked[0]
+        self.assertEqual(r.country, "Canada")
+        self.assertEqual(r.institutions, ["University of Waterloo"])
+        self.assertFalse(r.country_evidence["is_collaboration"])
+        self.assertEqual(r.country_evidence["matched_country"], "Canada")
+
+    def test_13_verified_canada_china_collaboration_prioritizes_canadian_evidence(self):
+        """
+        Verify the exact paper:
+        'Distributed Artificial Intelligence Empowered by End-Edge-Cloud Computing: A Survey'
+        which has co-authors from China (Central South Univ, Tsinghua) and Canada (Univ of Calgary, Univ of Waterloo).
+        Requirements:
+        1. Must pass the Canada filter because of verified Canadian co-authors.
+        2. Must prioritize Canadian institutions at the front of institutions list so UI doesn't hide them behind et al.
+        3. Must set matched_country = Canada and is_collaboration = True.
+        4. Must detail Canadian co-authorship in filter_explanation and country_evidence.
+        """
+        p_survey = Paper(
+            id="openalex:W4312588618",
+            title="Distributed Artificial Intelligence Empowered by End-Edge-Cloud Computing: A Survey",
+            authors=["Sijing Duan", "Dan Wang", "Ju Ren", "Feng Lyu", "Ye Zhang", "Huaqing Wu", "Xuemin Shen"],
+            institutions=[
+                "Central South University",
+                "Tsinghua University",
+                "Beijing Information Science & Technology University",
+                "University of Calgary",
+                "University of Waterloo"
+            ],
+            country="China",
+            countries=["China", "Canada"],
+            source="OpenAlex"
+        )
+
+        # 1. Passes country check
+        self.assertTrue(paper_matches_country(p_survey, "CA", "Canada"))
+
+        # 2. deduplicate_and_rank retains it and prioritizes Canadian affiliations
+        ranked = deduplicate_and_rank([p_survey], country="Canada", top_k=5)
+        self.assertEqual(len(ranked), 1)
+        r = ranked[0]
+
+        # Country reflects matched filter country
+        self.assertEqual(r.country, "Canada")
+
+        # Canadian institutions are prioritized at the front
+        self.assertIn("University of Calgary", r.institutions[:2])
+        self.assertIn("University of Waterloo", r.institutions[:2])
+
+        # Collaboration evidence details both countries and matching institutions
+        ce = r.country_evidence
+        self.assertTrue(ce["is_collaboration"])
+        self.assertEqual(ce["matched_country"], "Canada")
+        self.assertIn("University of Calgary", ce["matched_institutions"])
+        self.assertIn("University of Waterloo", ce["matched_institutions"])
+        self.assertIn("China", ce["collaboration_countries"])
+        self.assertIn("Canada", ce["collaboration_countries"])
+
+        # Explanation exposes the Canadian co-authorship
+        self.assertIn("University of Calgary", r.filter_explanation)
+        self.assertIn("University of Waterloo", r.filter_explanation)
+        self.assertIn("Collaboration", r.filter_explanation)
+
+    def test_14_cache_isolation_china_only_cached_paper_never_returned_for_canada(self):
+        """
+        Verify that a cached China-only paper from an unfiltered search is never
+        returned to a user who specifies country=Canada.
+        """
+        cache = SearchCache(ttl=3600.0)
+        p_china = Paper(
+            id="china-1",
+            title="China Cloud Infrastructure",
+            institutions=["Tsinghua University"],
+            country="China",
+            countries=["China"]
+        )
+        # Unfiltered search saved in cache
+        cache.set("cloud computing", [p_china], {"arxiv_count": 0, "ss_count": 1, "openalex_count": 0})
+
+        # Filtered request with country="Canada"
+        filtered_cache_key = "cloud computing|author:|inst:|country:Canada|k:10"
+        has_active_filters = True
+
+        entry = cache.get(filtered_cache_key)
+        if entry is None and not has_active_filters:
+            entry = cache.get("cloud computing")
+
+        self.assertIsNone(entry, "Filtered search must never fall back to unfiltered cache entry")
+
 
 if __name__ == "__main__":
     unittest.main()

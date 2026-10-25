@@ -1034,6 +1034,31 @@ def detect_country_from_text(text: str) -> List[str]:
     return found
 
 
+def institution_matches_country(inst: str, target_code: Optional[str], target_name: Optional[str]) -> bool:
+    """Check if an institution string corresponds to a target country code or name."""
+    if not inst or (not target_code and not target_name):
+        return True
+    inst_clean = inst.lower()
+    code = (target_code or "").upper()
+    name = (target_name or "").lower()
+    detected = detect_country_from_text(inst)
+    for d in detected:
+        d_code, d_name = resolve_country_code(d)
+        if (code and d_code == code) or (name and name in d_name.lower()):
+            return True
+    if name and name in inst_clean:
+        return True
+    if code:
+        code_pattern = rf"(?:^|[\s,;./\(\)\[\]]){re.escape(code.lower())}(?:[\s,;./\(\)\[\]]|$)"
+        if re.search(code_pattern, inst_clean):
+            return True
+    for known_inst, (ic_code, ic_name) in INSTITUTION_COUNTRY_MAP.items():
+        if known_inst in inst_clean or inst_clean in known_inst:
+            if (code and ic_code.upper() == code) or (name and name in ic_name.lower()):
+                return True
+    return False
+
+
 def paper_matches_country(paper: Paper, target_code: Optional[str], target_name: Optional[str]) -> bool:
     """
     Evidence-grounded country verification.
@@ -2791,18 +2816,60 @@ def deduplicate_and_rank(
                     p.country = primary_c
                 p.countries = inferred_countries
 
+        # When a country filter is active, prioritize institutions that match the target country
+        # and ensure the matched country is surfaced clearly for international collaborations.
+        matched_institutions = []
+        target_display_name = c_name or c_code
+        if c_code or c_name:
+            matched_institutions = [
+                inst for inst in p.institutions
+                if institution_matches_country(inst, c_code, c_name)
+            ]
+            other_institutions = [
+                inst for inst in p.institutions
+                if inst not in matched_institutions
+            ]
+            if matched_institutions:
+                p.institutions = matched_institutions + other_institutions
+
+            # If this paper matched via an international collaboration with the target country,
+            # align p.country to the user's requested filter country.
+            matched_c_found = None
+            for c in p_countries:
+                if (c_code and c.upper() == c_code.upper()) or (c_name and c_name.lower() in c.lower()):
+                    matched_c_found = target_display_name
+                    break
+            if matched_c_found:
+                p.country = matched_c_found
+            elif matched_institutions:
+                p.country = target_display_name
+
+        is_collab = len(p_countries) > 1
+        collaboration_others = [c for c in p_countries if c.lower() != (c_name or "").lower()]
+
+        if is_collab and matched_institutions and (c_code or c_name):
+            other_str = f" in international collaboration with {', '.join(collaboration_others)}" if collaboration_others else ""
+            ev_reason = f"Verified co-authorship at {', '.join(matched_institutions)} ({target_display_name}){other_str}."
+        elif is_collab:
+            ev_reason = f"Verified international collaboration across {', '.join(p_countries)}."
+
         p.country_evidence = {
-            "country": primary_c,
+            "country": p.country or primary_c,
+            "matched_country": target_display_name if (c_code or c_name) else (p.country or primary_c),
+            "matched_institutions": matched_institutions,
+            "primary_country": primary_c,
             "countries": p_countries,
             "status": ev_status,
             "confidence": ev_conf,
             "reasoning": ev_reason,
-            "is_collaboration": len(p_countries) > 1,
+            "is_collaboration": is_collab,
+            "collaboration_countries": p_countries,
         }
 
         # Determine institution evidence
         p.institution_evidence = {
             "institutions": p.institutions,
+            "matched_institutions": matched_institutions,
             "status": "verified" if "OpenAlex" in p.source else ("inferred" if p.institutions else "unknown"),
             "confidence": 1.0 if "OpenAlex" in p.source else (0.85 if p.institutions else 0.0),
         }
@@ -2810,9 +2877,12 @@ def deduplicate_and_rank(
         # Filter explanation
         score = semantic_scores.get(p.id, 0.0)
         relevance_str = f"relevance: {score:.2f}" if intent_text else "unconstrained"
-        inst_str = p.institutions[0] if p.institutions else "Independent"
-        c_str = f" — {primary_c} [{ev_status}]" if primary_c else ""
-        p.filter_explanation = f"Matched filters ({relevance_str}). Affiliation: {inst_str}{c_str}."
+        if is_collab and matched_institutions and (c_code or c_name):
+            p.filter_explanation = f"Matched via {target_display_name} co-authorship at {', '.join(matched_institutions)} (Collaboration: {', '.join(p_countries)})"
+        else:
+            inst_str = p.institutions[0] if p.institutions else "Independent"
+            c_str = f" — {p.country or primary_c} [{ev_status}]" if (p.country or primary_c) else ""
+            p.filter_explanation = f"Matched filters ({relevance_str}). Affiliation: {inst_str}{c_str}."
 
     return top_papers
 
