@@ -3680,12 +3680,39 @@
               <span class="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider border ${sourceBadgeClass}">
                 ${escapeHtml(p.source)}
               </span>
-              ${p.country ? `
-                <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/60 inline-flex items-center space-x-1" title="Affiliation Country: ${escapeHtml(p.country)}">
-                  <i data-lucide="globe" class="w-2.5 h-2.5 text-zinc-400"></i>
-                  <span>${escapeHtml(p.country)}</span>
-                </span>
-              ` : ''}
+              ${(() => {
+                const ce = p.country_evidence;
+                const status = ce ? ce.status : (p.country ? 'verified' : null);
+                const countryName = p.country || (ce ? ce.country : null);
+                const isCollab = (ce && ce.is_collaboration) || (p.countries && p.countries.length > 1);
+
+                let badgeHtml = '';
+                if (status === 'verified' && countryName) {
+                  badgeHtml = `<span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/60 inline-flex items-center space-x-1" title="Affiliation Country: ${escapeHtml(countryName)} [Verified: ${escapeHtml(ce ? ce.reasoning : 'OpenAlex institutional metadata')}]">
+                    <i data-lucide="check-circle" class="w-2.5 h-2.5 text-emerald-500"></i>
+                    <span>Verified: ${escapeHtml(countryName)}</span>
+                  </span>`;
+                } else if (status === 'inferred' && countryName) {
+                  badgeHtml = `<span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/60 inline-flex items-center space-x-1" title="Affiliation Country: ${escapeHtml(countryName)} [Inferred: ${escapeHtml(ce ? ce.reasoning : 'Reconciled from academic institutions')}]">
+                    <i data-lucide="sparkles" class="w-2.5 h-2.5 text-indigo-500"></i>
+                    <span>Inferred: ${escapeHtml(countryName)}</span>
+                  </span>`;
+                } else if (countryName) {
+                  badgeHtml = `<span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700/60 inline-flex items-center space-x-1" title="Affiliation Country: ${escapeHtml(countryName)}">
+                    <i data-lucide="globe" class="w-2.5 h-2.5 text-zinc-400"></i>
+                    <span>${escapeHtml(countryName)}</span>
+                  </span>`;
+                }
+
+                if (isCollab) {
+                  const collabTitle = p.countries ? p.countries.join(' + ') : 'International Collaboration';
+                  badgeHtml += `<span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800/60 inline-flex items-center space-x-1" title="Collaboration: ${escapeHtml(collabTitle)}">
+                    <i data-lucide="users" class="w-2.5 h-2.5 text-purple-500"></i>
+                    <span>Collaboration</span>
+                  </span>`;
+                }
+                return badgeHtml;
+              })()}
               ${codeBadgeHtml}
               ${yearHtml}
               ${citationHtml}
@@ -3716,6 +3743,13 @@
             <p class="text-[10px] text-slate-500 dark:text-slate-400 truncate flex items-center">
               <i data-lucide="building" class="w-2.5 h-2.5 inline mr-1 text-slate-400 shrink-0"></i>
               <span title="${escapeHtml(p.institutions.join(', '))}">${escapeHtml(p.institutions.slice(0, 2).join(' · '))}${p.institutions.length > 2 ? ' et al.' : ''}</span>
+            </p>
+          ` : ''}
+
+          ${p.filter_explanation ? `
+            <p class="text-[10px] text-slate-500 dark:text-slate-400 truncate flex items-center font-mono" title="${escapeHtml(p.filter_explanation)}">
+              <i data-lucide="info" class="w-2.5 h-2.5 inline mr-1 text-slate-400 shrink-0"></i>
+              <span>${escapeHtml(p.filter_explanation)}</span>
             </p>
           ` : ''}
 

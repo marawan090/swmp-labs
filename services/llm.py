@@ -571,13 +571,10 @@ async def _call_stream_with_retry(
                 return stream
             except Exception as e:
                 err_str = str(e).lower()
-                is_retryable = (
-                    "429" in err_str
+                is_auth_error = "401" in err_str or "invalid api key" in err_str or "access_denied" in err_str
+                is_retryable = not is_auth_error and (
+                    bool(re.search(r"\b(429|500|502|503|504)\b", err_str))
                     or "rate limit" in err_str
-                    or "500" in err_str
-                    or "502" in err_str
-                    or "503" in err_str
-                    or "504" in err_str
                     or "timeout" in err_str
                     or "overloaded" in err_str
                 )
@@ -632,13 +629,10 @@ async def _call_chat_with_retry(
                 return response
             except Exception as e:
                 err_str = str(e).lower()
-                is_retryable = (
-                    "429" in err_str
+                is_auth_error = "401" in err_str or "invalid api key" in err_str or "access_denied" in err_str
+                is_retryable = not is_auth_error and (
+                    bool(re.search(r"\b(429|500|502|503|504)\b", err_str))
                     or "rate limit" in err_str
-                    or "500" in err_str
-                    or "502" in err_str
-                    or "503" in err_str
-                    or "504" in err_str
                     or "timeout" in err_str
                     or "overloaded" in err_str
                 )
@@ -2189,3 +2183,802 @@ async def generate_compare_matrix(
     """Module-level helper to generate cross-paper trade-off matrix."""
     svc = service or get_default_llm_service()
     return await svc.generate_compare_matrix(papers=papers, custom_api_key=custom_api_key)
+
+
+# ============================================================================
+# AI-Assisted Entity Resolution, Evidence Provenance, and Query Intent Models
+# ============================================================================
+
+class InstitutionCandidate(BaseModel):
+    name: str
+    openalex_id: Optional[str] = None
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    confidence: float = 1.0
+
+
+class InstitutionResolution(BaseModel):
+    canonical_name: str
+    openalex_id: Optional[str] = None
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    is_ambiguous: bool = False
+    candidates: List[InstitutionCandidate] = Field(default_factory=list)
+    reasoning: str = ""
+
+
+class AuthorAffiliationEvidence(BaseModel):
+    author_name: str
+    institution: Optional[str] = None
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    status: str = "inferred"  # "verified" | "inferred" | "unknown"
+    confidence: float = 1.0
+
+
+class PaperAffiliationEvidence(BaseModel):
+    paper_id: str
+    primary_country: Optional[str] = None
+    primary_country_code: Optional[str] = None
+    countries: List[str] = Field(default_factory=list)
+    country_codes: List[str] = Field(default_factory=list)
+    institutions: List[str] = Field(default_factory=list)
+    status: str = "inferred"  # "verified" | "inferred" | "unknown"
+    is_international_collaboration: bool = False
+    confidence: float = 1.0
+    reasoning: str = ""
+    author_affiliations: List[AuthorAffiliationEvidence] = Field(default_factory=list)
+
+
+class QueryDecomposition(BaseModel):
+    topic: str
+    institution: Optional[str] = None
+    country: Optional[str] = None
+    country_code: Optional[str] = None
+    author: Optional[str] = None
+    has_geographic_conflict: bool = False
+    conflict_explanation: Optional[str] = None
+    reasoning: str = ""
+
+
+# Dedicated thread-safe TTL caches for AI entity resolution & evidence classifications
+_ai_entity_cache = SynthesisCache(ttl=3600.0)
+_ai_affiliation_cache = SynthesisCache(ttl=3600.0)
+_ai_query_intent_cache = SynthesisCache(ttl=3600.0)
+
+
+# Curated academic entity registry for instant 0ms entity resolution
+_CORE_ACADEMIC_INSTITUTIONS: Dict[str, Dict[str, Any]] = {
+    "mit": {
+        "canonical_name": "Massachusetts Institute of Technology",
+        "openalex_id": "I63966007",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "MIT standard canonical resolution."
+    },
+    "cmu": {
+        "canonical_name": "Carnegie Mellon University",
+        "openalex_id": "I74973187",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "CMU standard canonical resolution."
+    },
+    "stanford": {
+        "canonical_name": "Stanford University",
+        "openalex_id": "I97018004",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "Stanford University standard resolution."
+    },
+    "harvard": {
+        "canonical_name": "Harvard University",
+        "openalex_id": "I136199984",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "Harvard University standard resolution."
+    },
+    "uc berkeley": {
+        "canonical_name": "University of California, Berkeley",
+        "openalex_id": "I95457486",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "UC Berkeley standard canonical resolution."
+    },
+    "berkeley": {
+        "canonical_name": "University of California, Berkeley",
+        "openalex_id": "I95457486",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "Berkeley standard resolution in CS research."
+    },
+    "uwaterloo": {
+        "canonical_name": "University of Waterloo",
+        "openalex_id": "I157725225",
+        "country": "Canada",
+        "country_code": "CA",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "UWaterloo standard resolution."
+    },
+    "waterloo": {
+        "canonical_name": "University of Waterloo",
+        "openalex_id": "I157725225",
+        "country": "Canada",
+        "country_code": "CA",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "University of Waterloo resolution."
+    },
+    "uoft": {
+        "canonical_name": "University of Toronto",
+        "openalex_id": "I185261750",
+        "country": "Canada",
+        "country_code": "CA",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "UofT standard resolution."
+    },
+    "toronto": {
+        "canonical_name": "University of Toronto",
+        "openalex_id": "I185261750",
+        "country": "Canada",
+        "country_code": "CA",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "University of Toronto resolution."
+    },
+    "mcgill": {
+        "canonical_name": "McGill University",
+        "openalex_id": "I5023651",
+        "country": "Canada",
+        "country_code": "CA",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "McGill University resolution."
+    },
+    "ubc": {
+        "canonical_name": "University of British Columbia",
+        "openalex_id": "I141945490",
+        "country": "Canada",
+        "country_code": "CA",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "UBC standard resolution."
+    },
+    "oxford": {
+        "canonical_name": "University of Oxford",
+        "openalex_id": "I40120149",
+        "country": "United Kingdom",
+        "country_code": "GB",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "University of Oxford standard resolution."
+    },
+    "cambridge": {
+        "canonical_name": "University of Cambridge",
+        "openalex_id": "I241749",
+        "country": "United Kingdom",
+        "country_code": "GB",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "University of Cambridge standard resolution."
+    },
+    "eth": {
+        "canonical_name": "ETH Zurich",
+        "openalex_id": "I159176309",
+        "country": "Switzerland",
+        "country_code": "CH",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "ETH Zurich standard resolution."
+    },
+    "eth zurich": {
+        "canonical_name": "ETH Zurich",
+        "openalex_id": "I159176309",
+        "country": "Switzerland",
+        "country_code": "CH",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "ETH Zurich resolution."
+    },
+    "epfl": {
+        "canonical_name": "École Polytechnique Fédérale de Lausanne",
+        "openalex_id": "I185121406",
+        "country": "Switzerland",
+        "country_code": "CH",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "EPFL standard resolution."
+    },
+    "tsinghua": {
+        "canonical_name": "Tsinghua University",
+        "openalex_id": "I1702154",
+        "country": "China",
+        "country_code": "CN",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "Tsinghua University (清华大学) standard resolution."
+    },
+    "peking": {
+        "canonical_name": "Peking University",
+        "openalex_id": "I20238116",
+        "country": "China",
+        "country_code": "CN",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "Peking University (北京大学) standard resolution."
+    },
+    "nus": {
+        "canonical_name": "National University of Singapore",
+        "openalex_id": "I165779595",
+        "country": "Singapore",
+        "country_code": "SG",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "NUS standard resolution."
+    },
+    "ntu": {
+        "canonical_name": "Nanyang Technological University",
+        "openalex_id": "I172675005",
+        "country": "Singapore",
+        "country_code": "SG",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "NTU standard resolution."
+    },
+    "sorbonne": {
+        "canonical_name": "Sorbonne University",
+        "openalex_id": "I4210137788",
+        "country": "France",
+        "country_code": "FR",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "Sorbonne Université standard resolution."
+    },
+    "tum": {
+        "canonical_name": "Technical University of Munich",
+        "openalex_id": "I6290648",
+        "country": "Germany",
+        "country_code": "DE",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "TUM (Technische Universität München) standard resolution."
+    },
+    "tu munich": {
+        "canonical_name": "Technical University of Munich",
+        "openalex_id": "I6290648",
+        "country": "Germany",
+        "country_code": "DE",
+        "confidence": 1.0,
+        "is_ambiguous": False,
+        "reasoning": "TU Munich standard resolution."
+    },
+}
+
+_AMBIGUOUS_ACADEMIC_ENTITIES: Dict[str, Dict[str, Any]] = {
+    "columbia": {
+        "canonical_name": "Columbia University",
+        "openalex_id": "I5124864",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 0.88,
+        "is_ambiguous": True,
+        "candidates": [
+            {"name": "Columbia University", "openalex_id": "I5124864", "country": "United States", "country_code": "US", "confidence": 0.88},
+            {"name": "University of British Columbia", "openalex_id": "I141945490", "country": "Canada", "country_code": "CA", "confidence": 0.08},
+            {"name": "National University of Colombia", "openalex_id": "I118564535", "country": "Colombia", "country_code": "CO", "confidence": 0.04},
+        ],
+        "reasoning": "'Columbia' in computer science and AI research most frequently refers to Columbia University in New York, with University of British Columbia (UBC) as an alternate candidate."
+    },
+    "washington": {
+        "canonical_name": "University of Washington",
+        "openalex_id": "I204250575",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 0.78,
+        "is_ambiguous": True,
+        "candidates": [
+            {"name": "University of Washington", "openalex_id": "I204250575", "country": "United States", "country_code": "US", "confidence": 0.78},
+            {"name": "Washington University in St. Louis", "openalex_id": "I202304245", "country": "United States", "country_code": "US", "confidence": 0.20},
+            {"name": "George Washington University", "openalex_id": "I128362649", "country": "United States", "country_code": "US", "confidence": 0.02},
+        ],
+        "reasoning": "'Washington' in computing systems and AI research primarily denotes University of Washington (UW, Seattle), with Washington University in St. Louis (WashU) as a prominent candidate."
+    },
+    "imperial": {
+        "canonical_name": "Imperial College London",
+        "openalex_id": "I35440088",
+        "country": "United Kingdom",
+        "country_code": "GB",
+        "confidence": 0.95,
+        "is_ambiguous": True,
+        "candidates": [
+            {"name": "Imperial College London", "openalex_id": "I35440088", "country": "United Kingdom", "country_code": "GB", "confidence": 0.95},
+        ],
+        "reasoning": "'Imperial' in academic research unequivocally denotes Imperial College London."
+    },
+    "california": {
+        "canonical_name": "University of California, Berkeley",
+        "openalex_id": "I95457486",
+        "country": "United States",
+        "country_code": "US",
+        "confidence": 0.65,
+        "is_ambiguous": True,
+        "candidates": [
+            {"name": "University of California, Berkeley", "openalex_id": "I95457486", "country": "United States", "country_code": "US", "confidence": 0.65},
+            {"name": "University of California, Los Angeles", "openalex_id": "I161318765", "country": "United States", "country_code": "US", "confidence": 0.20},
+            {"name": "University of California, San Diego", "openalex_id": "I36234482", "country": "United States", "country_code": "US", "confidence": 0.15},
+        ],
+        "reasoning": "'California' is a multi-campus university system; UC Berkeley is the flagship research campus in academic computing."
+    }
+}
+
+
+def fallback_resolve_institution(
+    query: str,
+    candidates: Optional[List[Dict[str, Any]]] = None
+) -> InstitutionResolution:
+    """
+    Deterministic institution entity resolution when LLM is unavailable or for instant fast-path lookups.
+    Handles abbreviations, punctuation, ambiguities, and foreign university variants.
+    """
+    raw = (query or "").strip().lower()
+    norm = re.sub(r"[^\w\s]", " ", raw)
+    norm = " ".join(norm.split())
+
+    # 1. Ambiguous academic entity lookup
+    if raw in _AMBIGUOUS_ACADEMIC_ENTITIES:
+        d = _AMBIGUOUS_ACADEMIC_ENTITIES[raw]
+        cands = [InstitutionCandidate(**c) for c in d.get("candidates", [])]
+        return InstitutionResolution(
+            canonical_name=d["canonical_name"],
+            openalex_id=d.get("openalex_id"),
+            country=d.get("country"),
+            country_code=d.get("country_code"),
+            confidence=d.get("confidence", 0.8),
+            is_ambiguous=True,
+            candidates=cands,
+            reasoning=d.get("reasoning", "Ambiguous entity detected.")
+        )
+
+    # 2. Exact match in core academic registry
+    if raw in _CORE_ACADEMIC_INSTITUTIONS:
+        d = _CORE_ACADEMIC_INSTITUTIONS[raw]
+        return InstitutionResolution(
+            canonical_name=d["canonical_name"],
+            openalex_id=d.get("openalex_id"),
+            country=d.get("country"),
+            country_code=d.get("country_code"),
+            confidence=1.0,
+            is_ambiguous=False,
+            candidates=[],
+            reasoning=d.get("reasoning", "")
+        )
+    if norm in _CORE_ACADEMIC_INSTITUTIONS:
+        d = _CORE_ACADEMIC_INSTITUTIONS[norm]
+        return InstitutionResolution(
+            canonical_name=d["canonical_name"],
+            openalex_id=d.get("openalex_id"),
+            country=d.get("country"),
+            country_code=d.get("country_code"),
+            confidence=1.0,
+            is_ambiguous=False,
+            candidates=[],
+            reasoning=d.get("reasoning", "")
+        )
+
+    # 3. Match against OpenAlex candidate list if provided
+    if candidates and len(candidates) > 0:
+        top = candidates[0]
+        raw_id = str(top.get("id") or "").strip()
+        clean_id = raw_id.split("/")[-1] if "/" in raw_id else raw_id
+        disp = top.get("display_name") or query.title()
+        cc = (top.get("country_code") or "").upper() or None
+        
+        # Check if multiple candidates suggest ambiguity
+        is_ambig = len(candidates) > 1 and len(query.strip()) <= 12
+        parsed_cands = []
+        for c in candidates[:4]:
+            cid = str(c.get("id") or "").split("/")[-1]
+            cname = c.get("display_name") or ""
+            ccc = (c.get("country_code") or "").upper() or None
+            parsed_cands.append(InstitutionCandidate(name=cname, openalex_id=cid, country_code=ccc, confidence=0.7))
+
+        return InstitutionResolution(
+            canonical_name=disp,
+            openalex_id=clean_id or None,
+            country_code=cc,
+            confidence=0.85 if is_ambig else 0.95,
+            is_ambiguous=is_ambig,
+            candidates=parsed_cands,
+            reasoning=f"Resolved via academic registry candidates for '{query}'."
+        )
+
+    # 4. Fallback canonical title
+    return InstitutionResolution(
+        canonical_name=query.strip().title(),
+        confidence=0.6,
+        is_ambiguous=False,
+        candidates=[],
+        reasoning=f"Heuristic capitalization for '{query}'."
+    )
+
+
+def fallback_classify_affiliations(
+    paper: Paper,
+    target_country: Optional[str] = None
+) -> PaperAffiliationEvidence:
+    """
+    Evidence-grounded affiliation and country classification.
+    Strictly eliminates abstract keyword scanning. Evaluates author metadata,
+    institutions list, and structured OpenAlex provenance.
+    """
+    pid = paper.id
+    verified_countries = []
+    institutions = list(paper.institutions or [])
+    author_affils: List[AuthorAffiliationEvidence] = []
+
+    # 1. OpenAlex structured countries (highest provenance: verified)
+    if paper.countries:
+        for c in paper.countries:
+            c_clean = c.strip()
+            if c_clean and c_clean not in verified_countries:
+                verified_countries.append(c_clean)
+        status = "verified"
+        conf = 1.0
+        reasoning = f"Verified from structured OpenAlex author affiliations: {', '.join(verified_countries)}."
+    elif paper.country:
+        verified_countries.append(paper.country.strip())
+        status = "verified"
+        conf = 1.0
+        reasoning = f"Verified from primary paper metadata: {paper.country.strip()}."
+    else:
+        # 2. Check paper institutions against core academic registry (status: inferred)
+        inferred_from_inst = []
+        for inst in institutions:
+            inst_lower = inst.lower()
+            for key, rec in _CORE_ACADEMIC_INSTITUTIONS.items():
+                if key in inst_lower or inst_lower in key:
+                    cname = rec.get("country")
+                    if cname and cname not in inferred_from_inst:
+                        inferred_from_inst.append(cname)
+        if inferred_from_inst:
+            verified_countries = inferred_from_inst
+            status = "inferred"
+            conf = 0.92
+            reasoning = f"Inferred with high confidence from recognized author institutions: {', '.join(institutions)}."
+        else:
+            status = "unknown"
+            conf = 0.0
+            reasoning = "Affiliation missing or insufficient evidence to verify institutional country."
+
+    is_collab = len(verified_countries) > 1
+    primary_c = verified_countries[0] if verified_countries else None
+
+    return PaperAffiliationEvidence(
+        paper_id=pid,
+        primary_country=primary_c,
+        countries=verified_countries,
+        institutions=institutions,
+        status=status,
+        is_international_collaboration=is_collab,
+        confidence=conf,
+        reasoning=reasoning,
+        author_affiliations=author_affils
+    )
+
+
+def fallback_decompose_query(
+    raw_query: str,
+    explicit_filters: Optional[Dict[str, Any]] = None
+) -> QueryDecomposition:
+    """
+    Deterministic query decomposition and geographic conflict detection.
+    Separates topic keywords from institutional and geographic constraints.
+    """
+    ef = explicit_filters or {}
+    text = (raw_query or "").strip()
+    topic = text
+    institution = ef.get("institution") or ef.get("university")
+    country = ef.get("country")
+    author = ef.get("author")
+    has_conflict = False
+    conflict_msg = None
+
+    # Detect patterns like "... from Stanford in Canada" or "... at MIT"
+    inst_match = re.search(r"\b(?:from|at)\s+([A-Z][a-zA-Z\s]{2,25}?)(?:\s+(?:in|by)\b|$)", text, re.IGNORECASE)
+    if inst_match and not institution:
+        cand_inst = inst_match.group(1).strip()
+        cand_lower = cand_inst.lower()
+        if any(k in cand_lower for k in _CORE_ACADEMIC_INSTITUTIONS) or any(k in cand_lower for k in _AMBIGUOUS_ACADEMIC_ENTITIES):
+            institution = cand_inst
+            topic = re.sub(rf"\b(?:from|at)\s+{re.escape(cand_inst)}\b", " ", topic, flags=re.IGNORECASE).strip()
+
+    country_match = re.search(r"\bin\s+([A-Z][a-zA-Z\s]{2,20}?)(?:\s+(?:from|at|by)\b|$)", text, re.IGNORECASE)
+    if country_match and not country:
+        cand_country = country_match.group(1).strip()
+        cand_lower = cand_country.lower()
+        from .search import COUNTRY_REGISTRY
+        if cand_lower in COUNTRY_REGISTRY:
+            country = cand_country
+            topic = re.sub(rf"\bin\s+{re.escape(cand_country)}\b", " ", topic, flags=re.IGNORECASE).strip()
+
+    topic = re.sub(r"\s+", " ", topic).strip()
+
+    if institution and country:
+        inst_lower = institution.lower()
+        country_lower = country.lower()
+        inst_res = fallback_resolve_institution(inst_lower)
+        if inst_res.country and inst_res.country.lower() != country_lower:
+            from .search import COUNTRY_REGISTRY
+            c_info = COUNTRY_REGISTRY.get(country_lower)
+            target_c_name = c_info[1] if c_info else country.title()
+            if inst_res.country != target_c_name:
+                has_conflict = True
+                conflict_msg = (
+                    f"{inst_res.canonical_name} is located in {inst_res.country}. "
+                    f"Searching for research collaborations involving {target_c_name} or researchers affiliated with {inst_res.canonical_name}."
+                )
+
+    return QueryDecomposition(
+        topic=topic or text,
+        institution=institution,
+        country=country,
+        author=author,
+        has_geographic_conflict=has_conflict,
+        conflict_explanation=conflict_msg,
+        reasoning="Semantic decomposition completed."
+    )
+
+
+async def _service_resolve_institution_entity(
+    self: ResearchLLMService,
+    query: str,
+    candidates: Optional[List[Dict[str, Any]]] = None,
+    custom_api_key: Optional[str] = None
+) -> InstitutionResolution:
+    """
+    AI-assisted institution entity resolution using OrcaRouter.
+    Standardizes abbreviations, handles ambiguities, and resolves home countries.
+    Aggressively caches results and falls back to deterministic resolution on timeout/rate-limit.
+    """
+    clean_q = (query or "").strip()
+    if not clean_q:
+        return InstitutionResolution(canonical_name="", confidence=1.0)
+
+    cache_key = f"ai_inst_resolve:{clean_q.lower()}"
+    cached = _ai_entity_cache.get(cache_key)
+    if cached is not None:
+        try:
+            return InstitutionResolution(**json.loads(cached))
+        except Exception:
+            pass
+
+    if clean_q.lower() in _CORE_ACADEMIC_INSTITUTIONS:
+        res = fallback_resolve_institution(clean_q, candidates)
+        _ai_entity_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+    client = self._get_client(custom_api_key)
+    if client is None:
+        res = fallback_resolve_institution(clean_q, candidates)
+        _ai_entity_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+    cand_summary = ""
+    if candidates:
+        cand_summary = "\nCandidate entities from OpenAlex registry:\n" + json.dumps([
+            {"id": c.get("id"), "name": c.get("display_name"), "country": c.get("country_code"), "works": c.get("works_count")}
+            for c in candidates[:4]
+        ])
+
+    prompt = (
+        f"You are an academic entity resolution engine. Given the institution query '{clean_q}'{cand_summary}\n\n"
+        "Output ONLY a valid JSON object matching this schema:\n"
+        "{\n"
+        '  "canonical_name": "<full canonical English institution name>",\n'
+        '  "openalex_id": "<OpenAlex ID if identified or null>",\n'
+        '  "country": "<home country name>",\n'
+        '  "country_code": "<2-letter ISO code>",\n'
+        '  "confidence": <float 0.0 to 1.0>,\n'
+        '  "is_ambiguous": <true if multiple prominent universities share this name, e.g. Columbia, Washington>,\n'
+        '  "candidates": [{"name": "...", "country": "...", "confidence": 0.X}],\n'
+        '  "reasoning": "<concise rationale>"\n'
+        "}\n"
+        "Do NOT output markdown fences or explanatory text."
+    )
+
+    try:
+        async with llm_semaphore:
+            resp = await asyncio.wait_for(
+                _call_chat_with_retry(
+                    client=client,
+                    primary_model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=300,
+                    secondary_model=SECONDARY_MODEL,
+                ),
+                timeout=4.0
+            )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        cleaned_json = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+        data = json.loads(cleaned_json)
+        res = InstitutionResolution(**data)
+        _ai_entity_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+    except Exception as e:
+        logger.info("AI entity resolution fallback triggered for %r: %s", clean_q, str(e))
+        res = fallback_resolve_institution(clean_q, candidates)
+        _ai_entity_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+
+async def _service_classify_paper_affiliations(
+    self: ResearchLLMService,
+    paper: Paper,
+    target_country: Optional[str] = None,
+    custom_api_key: Optional[str] = None
+) -> PaperAffiliationEvidence:
+    """
+    Evidence-grounded affiliation classification using OrcaRouter.
+    Strictly verifies author institutional origins, handles international collaborations,
+    and rejects incidental abstract mentions.
+    """
+    cache_key = f"ai_affil:{paper.id}:{target_country or ''}"
+    cached = _ai_affiliation_cache.get(cache_key)
+    if cached is not None:
+        try:
+            return PaperAffiliationEvidence(**json.loads(cached))
+        except Exception:
+            pass
+
+    if paper.countries or paper.country:
+        res = fallback_classify_affiliations(paper, target_country)
+        _ai_affiliation_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+    client = self._get_client(custom_api_key)
+    if client is None:
+        res = fallback_classify_affiliations(paper, target_country)
+        _ai_affiliation_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+    prompt = (
+        "You are an academic research provenance and affiliation analyzer.\n"
+        f"Title: {paper.title}\n"
+        f"Authors: {', '.join(paper.authors[:6]) if paper.authors else 'Unlisted'}\n"
+        f"Institutions listed: {', '.join(paper.institutions) if paper.institutions else 'None provided'}\n"
+        f"Abstract snippet: {paper.abstract[:400] if paper.abstract else 'No abstract'}\n\n"
+        "CRITICAL RULE: DO NOT count incidental mentions of countries in the abstract (e.g. datasets, literature review) as author affiliations. Ground ONLY in actual author institutions.\n"
+        "Output ONLY a valid JSON object matching this schema:\n"
+        "{\n"
+        '  "paper_id": "' + paper.id + '",\n'
+        '  "primary_country": "<country of primary author or null>",\n'
+        '  "primary_country_code": "<2-letter ISO code or null>",\n'
+        '  "countries": ["<country1>", "<country2>"],\n'
+        '  "country_codes": ["<code1>"],\n'
+        '  "institutions": ["<canonical institution names>"],\n'
+        '  "status": "<verified|inferred|unknown>",\n'
+        '  "is_international_collaboration": <true if multiple countries involved>,\n'
+        '  "confidence": <float 0.0 to 1.0>,\n'
+        '  "reasoning": "<concise explanation of institutional evidence>"\n'
+        "}\n"
+        "Do NOT output markdown fences or explanatory text."
+    )
+
+    try:
+        async with llm_semaphore:
+            resp = await asyncio.wait_for(
+                _call_chat_with_retry(
+                    client=client,
+                    primary_model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=350,
+                    secondary_model=SECONDARY_MODEL,
+                ),
+                timeout=4.0
+            )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        cleaned_json = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+        data = json.loads(cleaned_json)
+        res = PaperAffiliationEvidence(**data)
+        _ai_affiliation_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+    except Exception as e:
+        logger.info("AI affiliation classification fallback triggered for %s: %s", paper.id, str(e))
+        res = fallback_classify_affiliations(paper, target_country)
+        _ai_affiliation_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+
+async def _service_decompose_query_intent(
+    self: ResearchLLMService,
+    raw_query: str,
+    explicit_filters: Optional[Dict[str, Any]] = None,
+    custom_api_key: Optional[str] = None
+) -> QueryDecomposition:
+    """
+    Decompose a free-form research query into topic, institution, country, and author,
+    detecting any geographic conflict (e.g. 'Stanford in Canada').
+    """
+    clean_q = (raw_query or "").strip()
+    ef = explicit_filters or {}
+    cache_key = f"ai_query_intent:{clean_q}:{ef.get('institution','')}:{ef.get('country','')}"
+    cached = _ai_query_intent_cache.get(cache_key)
+    if cached is not None:
+        try:
+            return QueryDecomposition(**json.loads(cached))
+        except Exception:
+            pass
+
+    if not any(w in clean_q.lower() for w in ("from", "at", "in", "by")) or not clean_q:
+        res = fallback_decompose_query(clean_q, explicit_filters)
+        _ai_query_intent_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+    client = self._get_client(custom_api_key)
+    if client is None:
+        res = fallback_decompose_query(clean_q, explicit_filters)
+        _ai_query_intent_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+    prompt = (
+        f"You are an academic query intent parser. Analyze this search query: '{clean_q}'\n"
+        f"Existing explicit filters: {json.dumps(ef)}\n\n"
+        "Output ONLY a valid JSON object matching this schema:\n"
+        "{\n"
+        '  "topic": "<pure research topic keywords without institution/country>",\n'
+        '  "institution": "<institution/university name if mentioned or null>",\n'
+        '  "country": "<country name if mentioned or null>",\n'
+        '  "country_code": "<2-letter ISO code if country identified or null>",\n'
+        '  "author": "<author name if mentioned or null>",\n'
+        '  "has_geographic_conflict": <true if institution home country contradicts requested country, e.g. Stanford (USA) in Canada>,\n'
+        '  "conflict_explanation": "<concise explanation if conflict exists or null>",\n'
+        '  "reasoning": "<concise reasoning>"\n'
+        "}\n"
+        "Do NOT output markdown fences or explanatory text."
+    )
+
+    try:
+        async with llm_semaphore:
+            resp = await asyncio.wait_for(
+                _call_chat_with_retry(
+                    client=client,
+                    primary_model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=300,
+                    secondary_model=SECONDARY_MODEL,
+                ),
+                timeout=3.5
+            )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        cleaned_json = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+        data = json.loads(cleaned_json)
+        res = QueryDecomposition(**data)
+        _ai_query_intent_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+    except Exception as e:
+        logger.info("AI query intent fallback triggered for %r: %s", clean_q, str(e))
+        res = fallback_decompose_query(clean_q, explicit_filters)
+        _ai_query_intent_cache.set(cache_key, json.dumps(res.model_dump()))
+        return res
+
+
+ResearchLLMService.resolve_institution_entity = _service_resolve_institution_entity
+ResearchLLMService.classify_paper_affiliations = _service_classify_paper_affiliations
+ResearchLLMService.decompose_query_intent = _service_decompose_query_intent

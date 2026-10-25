@@ -1813,11 +1813,39 @@ async def research_stream_endpoint(
                 yield sse_event({"type": "done", "message": "Literature discovery complete (cache hit)."})
                 return
 
-            # Stage 1: Semantic intent extraction (stage names unchanged per SSE contract)
-            yield sse_event({"type": "status", "stage": "extract_keywords", "message": "Extracting semantic intent and conceptual equivalents..."})
-            await asyncio.sleep(0.05)
+            # Stage 1: Semantic intent extraction & AI query decomposition
+            yield sse_event({"type": "status", "stage": "extract_keywords", "message": "Extracting semantic intent and analyzing query constraints..."})
+            await asyncio.sleep(0.04)
 
-            keywords = clean_academic_query(clean_query)
+            # AI Query Intent & Constraint Decomposition
+            try:
+                decomposition = await llm_service.decompose_query_intent(
+                    clean_query,
+                    explicit_filters={
+                        "author": clean_author,
+                        "institution": clean_institution,
+                        "country": clean_country
+                    },
+                    custom_api_key=effective_orca_key
+                )
+                if not clean_institution and decomposition.institution:
+                    clean_institution = decomposition.institution
+                if not clean_country and decomposition.country:
+                    clean_country = decomposition.country
+                if not clean_author and decomposition.author:
+                    clean_author = decomposition.author
+
+                if decomposition.has_geographic_conflict and decomposition.conflict_explanation:
+                    yield sse_event({
+                        "type": "status",
+                        "stage": "intent_disambiguated",
+                        "message": f"Geographic Notice: {decomposition.conflict_explanation}"
+                    })
+                    await asyncio.sleep(0.04)
+                keywords = clean_academic_query(decomposition.topic or clean_query)
+            except Exception as dec_err:
+                logger.info("Query decomposition fallback: %s", str(dec_err))
+                keywords = clean_academic_query(clean_query)
             # Custom-search hardening: author/institution-only queries yield keywords == "".
             # Keep "" for fetchers (filter-only) but show a readable label in the status event.
             keywords_label = keywords or "(filters only — no topic keywords)"

@@ -483,6 +483,10 @@ class Paper(BaseModel):
     # [{"name": str, "position": "first"|"middle"|"last"|"", "is_corresponding": bool}]
     corresponding_author: Optional[str] = None
     author_details: List[Dict[str, Any]] = Field(default_factory=list)
+    # Evidence-based affiliation & provenance tracking
+    country_evidence: Optional[Dict[str, Any]] = None
+    institution_evidence: Optional[Dict[str, Any]] = None
+    filter_explanation: Optional[str] = None
 
 
 
@@ -955,8 +959,13 @@ def detect_country_from_text(text: str) -> List[str]:
 
 def paper_matches_country(paper: Paper, target_code: Optional[str], target_name: Optional[str]) -> bool:
     """
-    Strictly check if a paper matches a target country by ISO code, canonical name,
-    institutions list, or affiliations text.
+    Evidence-grounded country verification.
+    Strictly evaluates:
+      1. Explicit country_evidence object (verified or high-confidence inferred).
+      2. Direct paper.country or paper.countries metadata.
+      3. Author institutions matched against country registry & known institutions.
+    CRITICAL: Incidental country mentions in paper abstracts NEVER qualify.
+    Author names without paper-level institutional evidence do NOT qualify.
     """
     if not target_code and not target_name:
         return True
@@ -964,7 +973,25 @@ def paper_matches_country(paper: Paper, target_code: Optional[str], target_name:
     code = (target_code or "").upper()
     name = (target_name or "").lower()
 
-    # 1. Direct paper country
+    # 1. Structured country evidence model
+    if paper.country_evidence and isinstance(paper.country_evidence, dict):
+        ev = paper.country_evidence
+        ev_status = ev.get("status", "unknown")
+        if ev_status in ("verified", "inferred") and float(ev.get("confidence", 0.0)) >= 0.7:
+            ev_c = (ev.get("country") or ev.get("primary_country") or "").strip()
+            ev_code = (ev.get("country_code") or ev.get("primary_country_code") or "").upper()
+            if code and ev_code == code:
+                return True
+            if name and name in ev_c.lower():
+                return True
+            for c in ev.get("countries", []):
+                if (code and c.upper() == code) or (name and name in c.lower()):
+                    return True
+            for cc in ev.get("country_codes", []):
+                if code and cc.upper() == code:
+                    return True
+
+    # 2. Direct paper country
     if paper.country:
         p_c = paper.country.strip()
         if code and p_c.upper() == code:
@@ -972,7 +999,7 @@ def paper_matches_country(paper: Paper, target_code: Optional[str], target_name:
         if name and name in p_c.lower():
             return True
 
-    # 2. Paper countries list
+    # 3. Paper countries list (all affiliated countries / international collaborations)
     if paper.countries:
         for c in paper.countries:
             c_str = c.strip()
@@ -981,10 +1008,18 @@ def paper_matches_country(paper: Paper, target_code: Optional[str], target_name:
             if name and name in c_str.lower():
                 return True
 
-    # 3. Paper institutions / affiliations & known institution country mapping
+    # 4. Author institutions & affiliations text
     if paper.institutions:
         for inst in paper.institutions:
             inst_lower = inst.lower()
+            # Direct text detection in affiliation string
+            detected = detect_country_from_text(inst)
+            for d_name in detected:
+                if name and name in d_name.lower():
+                    return True
+                d_code, _ = resolve_country_code(d_name)
+                if code and d_code == code:
+                    return True
             if name and name in inst_lower:
                 return True
             if code:
@@ -998,27 +1033,6 @@ def paper_matches_country(paper: Paper, target_code: Optional[str], target_name:
                         return True
                     if name and name in ic_name.lower():
                         return True
-
-    # 4. Known author country mapping
-    if paper.authors:
-        for auth in paper.authors:
-            auth_clean = auth.strip().lower()
-            for known_auth, (ac_code, ac_name) in AUTHOR_COUNTRY_MAP.items():
-                if known_auth in auth_clean or auth_clean in known_auth:
-                    if code and ac_code.upper() == code:
-                        return True
-                    if name and name in ac_name.lower():
-                        return True
-
-    # 5. Abstract / Title text affiliation signal (e.g. 'University of Toronto, Canada' or 'Vector Institute')
-    text_corpus = f"{paper.title} {paper.abstract}".lower()
-    if name and len(name) >= 4:
-        if re.search(rf"\b{re.escape(name)}\b", text_corpus):
-            return True
-        for known_inst, (ic_code, ic_name) in INSTITUTION_COUNTRY_MAP.items():
-            if code and ic_code.upper() == code and len(known_inst) >= 5:
-                if re.search(rf"\b{re.escape(known_inst)}\b", text_corpus):
-                    return True
 
     return False
 
@@ -1781,7 +1795,7 @@ async def resolve_openalex_institution_id(
     }
     params = _openalex_params({
         "search": clean_name,
-        "per-page": 1,
+        "per-page": 5,
         "select": "id,display_name,works_count,country_code",
     })
     try:
@@ -1795,11 +1809,21 @@ async def resolve_openalex_institution_id(
         if resp.status_code == 200:
             data = resp.json()
             results = data.get("results", [])
-            if results and isinstance(results[0], dict) and results[0].get("id"):
-                raw_id = str(results[0]["id"]).strip()
-                inst_id = raw_id.split("/")[-1] if "/" in raw_id else raw_id
-                disp_name = (results[0].get("display_name") or clean_name).strip()
-                res = (inst_id, disp_name)
+            if results and isinstance(results, list):
+                from .llm import get_default_llm_service, fallback_resolve_institution
+                try:
+                    svc = get_default_llm_service()
+                    ai_res = await svc.resolve_institution_entity(clean_name, candidates=results)
+                    raw_id = ai_res.openalex_id or (str(results[0].get("id", "")).split("/")[-1])
+                    inst_id = raw_id.split("/")[-1] if "/" in raw_id else raw_id
+                    disp_name = ai_res.canonical_name or (results[0].get("display_name") or clean_name).strip()
+                    res = (inst_id, disp_name)
+                except Exception:
+                    fb_res = fallback_resolve_institution(clean_name, candidates=results)
+                    raw_id = fb_res.openalex_id or (str(results[0].get("id", "")).split("/")[-1])
+                    inst_id = raw_id.split("/")[-1] if "/" in raw_id else raw_id
+                    disp_name = fb_res.canonical_name or (results[0].get("display_name") or clean_name).strip()
+                    res = (inst_id, disp_name)
                 set_cached_entity_id(cache_key, res)
                 logger.info("Resolved institution entity %r -> ID: %s (%s)", clean_name, inst_id, disp_name)
                 return res
@@ -2492,7 +2516,65 @@ def deduplicate_and_rank(
         return (country_match * 2 + inst_match * 2 + author_match, semantic, has_code, year_score, citation_score)
 
     merged_papers.sort(key=ranking_score, reverse=True)
-    return merged_papers[:top_k]
+    top_papers = merged_papers[:top_k]
+
+    # Populate evidence & provenance details on final papers
+    for p in top_papers:
+        # Determine country evidence & status
+        ev_status = "unknown"
+        ev_conf = 0.0
+        ev_reason = "Affiliation unverified or missing."
+        p_countries = list(p.countries or [])
+        primary_c = p.country or (p_countries[0] if p_countries else None)
+        
+        if p.countries or p.country:
+            ev_status = "verified"
+            ev_conf = 1.0
+            ev_reason = f"Verified from structured institutional metadata: {', '.join(p_countries or [p.country])}."
+        elif p.institutions:
+            inferred_countries = []
+            for inst in p.institutions:
+                detected = detect_country_from_text(inst)
+                for d in detected:
+                    if d not in inferred_countries:
+                        inferred_countries.append(d)
+                for ki, (kic, kin) in INSTITUTION_COUNTRY_MAP.items():
+                    if ki in inst.lower() and kin not in inferred_countries:
+                        inferred_countries.append(kin)
+            if inferred_countries:
+                ev_status = "inferred"
+                ev_conf = 0.92
+                ev_reason = f"Inferred with high confidence from recognized institutions: {', '.join(p.institutions)}."
+                p_countries = inferred_countries
+                primary_c = inferred_countries[0]
+                if not p.country:
+                    p.country = primary_c
+                p.countries = inferred_countries
+
+        p.country_evidence = {
+            "country": primary_c,
+            "countries": p_countries,
+            "status": ev_status,
+            "confidence": ev_conf,
+            "reasoning": ev_reason,
+            "is_collaboration": len(p_countries) > 1,
+        }
+
+        # Determine institution evidence
+        p.institution_evidence = {
+            "institutions": p.institutions,
+            "status": "verified" if "OpenAlex" in p.source else ("inferred" if p.institutions else "unknown"),
+            "confidence": 1.0 if "OpenAlex" in p.source else (0.85 if p.institutions else 0.0),
+        }
+
+        # Filter explanation
+        score = semantic_scores.get(p.id, 0.0)
+        relevance_str = f"relevance: {score:.2f}" if intent_text else "unconstrained"
+        inst_str = p.institutions[0] if p.institutions else "Independent"
+        c_str = f" — {primary_c} [{ev_status}]" if primary_c else ""
+        p.filter_explanation = f"Matched filters ({relevance_str}). Affiliation: {inst_str}{c_str}."
+
+    return top_papers
 
 
 async def search_academic_papers(
