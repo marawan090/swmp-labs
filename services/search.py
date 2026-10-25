@@ -1138,6 +1138,122 @@ def paper_matches_country(paper: Paper, target_code: Optional[str], target_name:
 
     return False
 
+
+def paper_matches_author(paper: Paper, target_author: Optional[str]) -> bool:
+    """
+    Evidence-grounded author verification.
+    Strictly evaluates paper.authors against target_author while avoiding false matches
+    between distinct researchers with similar names (e.g. 'John Smith' vs 'Jonathan Smith',
+    or 'Smith' vs 'Smithson' or 'Goldsmith').
+    Handles standard academic name variants:
+      - 'Smith, John' vs 'John Smith'
+      - 'John A. Smith' vs 'John Smith'
+      - 'J. Smith' vs 'John Smith'
+    Returns False if target_author is specified but paper has no authors or no match.
+    """
+    if not target_author or not target_author.strip():
+        return True
+    if not paper.authors:
+        return False
+
+    target_clean = target_author.strip().lower()
+    target_words = [w for w in re.findall(r"[a-z0-9]+", target_clean) if len(w) > 0]
+    if not target_words:
+        return True
+
+    for author in paper.authors:
+        if not author:
+            continue
+        auth_clean = author.strip().lower()
+        auth_words = [w for w in re.findall(r"[a-z0-9]+", auth_clean) if len(w) > 0]
+        if not auth_words:
+            continue
+
+        # 1. Exact full string match
+        if target_clean == auth_clean:
+            return True
+
+        # 2. Word-bounded substring match for full multi-word query (e.g. "john smith")
+        if re.search(rf"\b{re.escape(target_clean)}\b", auth_clean):
+            return True
+
+        # 3. Single-word target (e.g., surname "Smith"):
+        # Must match an exact word token in author name, never a substring of a longer word.
+        if len(target_words) == 1:
+            target_word = target_words[0]
+            if any(w == target_word for w in auth_words):
+                return True
+            continue
+
+        # 4. Multi-word target (e.g. "John Smith" or "John A. Smith"):
+        # Match surname + first name / initial variants.
+        target_first = target_words[0]
+        target_last = target_words[-1]
+
+        if target_last in auth_words:
+            # Surname matches. Check first name / initial match.
+            if target_first in auth_words:
+                return True
+            # Author has initial matching target first name (e.g. "J." or "J" for "John")
+            first_initial = target_first[0]
+            if any(w == first_initial for w in auth_words):
+                return True
+            # Target has initial matching author first name (e.g. target="J. Smith", author="John Smith")
+            if len(target_first) == 1 and any(w.startswith(target_first) for w in auth_words if w != target_last):
+                return True
+
+    return False
+
+
+def paper_matches_year(
+    paper: Paper,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    target_year: Optional[int] = None
+) -> bool:
+    """
+    Evidence-grounded publication year verification.
+    Strictly enforces:
+      - exact year match when target_year is provided.
+      - bounded range [year_start, year_end] (inclusive).
+      - missing publication date (year=None) NEVER satisfies an active year constraint.
+    """
+    if target_year is None and year_start is None and year_end is None:
+        return True
+    if paper.year is None:
+        return False
+    if target_year is not None and paper.year != target_year:
+        return False
+    if year_start is not None and paper.year < year_start:
+        return False
+    if year_end is not None and paper.year > year_end:
+        return False
+    return True
+
+
+def paper_matches_source(paper: Paper, target_source: Optional[str] = None) -> bool:
+    """Check if paper originated from or was merged with target repository source."""
+    if not target_source or not target_source.strip() or target_source.strip().lower() == "all":
+        return True
+    src = target_source.strip().lower()
+    p_src = (paper.source or "").lower()
+    if src == "arxiv":
+        return "arxiv" in p_src
+    if src in ("scholar", "semanticscholar", "semantic_scholar", "semantic"):
+        return "semantic" in p_src
+    if src in ("openalex", "oa"):
+        return "openalex" in p_src
+    return src in p_src
+
+
+def paper_matches_pdf(paper: Paper, pdf_only: bool = False) -> bool:
+    """Check if paper has accessible PDF link (not just abstract or landing page)."""
+    if not pdf_only:
+        return True
+    has_pdf = bool(paper.pdf_url or (paper.url and paper.url.lower().endswith(".pdf")))
+    return has_pdf
+
+
 PI_ROLE_HINT = "Lab Lead / Principal Investigator"
 LEAD_AUTHOR_ROLE_HINT = "Lead Author / Researcher"
 
@@ -1287,7 +1403,7 @@ def clean_academic_query(raw_query: str) -> str:
     expand_semantic_concepts() / extract_semantic_groups() — this function only
     normalizes, never hallucinates. Empty input returns "" (filter-only bypass).
     """
-    if not raw_query or not raw_query.strip():
+    if not raw_query or not raw_query.strip() or not re.search(r"[a-zA-Z0-9]", raw_query):
         return ""
 
     # 1. Preserve parenthetical domain context: "(such as reactor or thermal
@@ -1299,13 +1415,13 @@ def clean_academic_query(raw_query: str) -> str:
         r"\brecent advances (and|&) (research )?gaps (in|for|on)\b",
         r"\b(recent|current|latest) advances (in|for|on)\b",
         r"\bresearch gaps (in|for|on)\b",
-        r"\bstate of the art (in|for|on)\b",
+        r"\b(the )?state of the art (in|for|on)\b",
         r"\bliterature review (of|on|for)\b",
         r"\bsurvey (of|on|for)\b",
         r"\b(can you|please) (find|search|show|tell me about|explain)\b",
         r"\bcan you please\b",
         r"\bcan you\b",
-        r"\bwhat (is|are|were|do you know about)\b",
+        r"\bwhat (is|are|were|do you know about)( the)?\b",
         r"\btell me (about|everything about)\b",
         r"\bsearch for (papers on|articles about|research on)?\b",
         r"\blooking for (papers on|articles on|research on)?\b",
@@ -2655,6 +2771,11 @@ def deduplicate_and_rank(
     institution: Optional[str] = None,
     country: Optional[str] = None,
     query: Optional[str] = None,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    year: Optional[int] = None,
+    source: Optional[str] = None,
+    pdf_only: bool = False,
 ) -> List[Paper]:
     """
     Deduplicate papers across ArXiv, Semantic Scholar, and OpenAlex by normalized title similarity.
@@ -2760,7 +2881,28 @@ def deduplicate_and_rank(
     if author_clean:
         merged_papers = [
             p for p in merged_papers
-            if any(author_clean in a.lower() for a in p.authors)
+            if paper_matches_author(p, author_clean)
+        ]
+
+    # 4. Strict Year filtering (AND composition)
+    if year is not None or year_start is not None or year_end is not None:
+        merged_papers = [
+            p for p in merged_papers
+            if paper_matches_year(p, year_start=year_start, year_end=year_end, target_year=year)
+        ]
+
+    # 5. Strict Source filtering (AND composition)
+    if source and source.strip().lower() != "all":
+        merged_papers = [
+            p for p in merged_papers
+            if paper_matches_source(p, source)
+        ]
+
+    # 6. Strict PDF filtering (AND composition)
+    if pdf_only:
+        merged_papers = [
+            p for p in merged_papers
+            if paper_matches_pdf(p, pdf_only=True)
         ]
 
     # Semantic relevance ranking (intent-based, synonym-aware):
@@ -2771,7 +2913,7 @@ def deduplicate_and_rank(
             semantic_scores[p.id] = semantic_intent_score(intent_text, p.title, p.abstract or "")
 
     def ranking_score(p: Paper) -> Tuple[int, float, int, int, int]:
-        author_match = 1 if (author_clean and any(author_clean in a.lower() for a in p.authors)) else 0
+        author_match = 1 if (author_clean and paper_matches_author(p, author_clean)) else 0
         inst_match = 1 if (inst_clean and paper_matches_institution(p, inst_clean, resolved_inst)) else 0
         country_match = 1 if ((c_code or c_name) and paper_matches_country(p, c_code, c_name)) else 0
         semantic = round(semantic_scores.get(p.id, 0.0), 4) if intent_text else 0.0

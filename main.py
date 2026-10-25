@@ -613,6 +613,11 @@ class SearchRequest(BaseModel):
     institution: Optional[str] = Field(default=None, description="Filter by institution or university name")
     university: Optional[str] = Field(default=None, description="Filter by university name (alias for institution)")
     country: Optional[str] = Field(default=None, description="Filter by country or country code (e.g. Canada, USA, CA, US)")
+    year_start: Optional[int] = Field(default=None, description="Filter publication year start (inclusive)")
+    year_end: Optional[int] = Field(default=None, description="Filter publication year end (inclusive)")
+    year: Optional[int] = Field(default=None, description="Filter exact publication year")
+    source: Optional[str] = Field(default=None, description="Filter source repository ('arxiv', 'scholar', 'openalex')")
+    pdf_only: Optional[bool] = Field(default=None, description="Filter to papers with PDF links only")
     categories: Optional[List[str]] = Field(default=None, description="Filter by subject categories")
     top_k: int = Field(default=10, ge=1, le=100)
     limit: Optional[int] = Field(default=None, ge=1, le=100, description="Target paper count (10, 25, 50, 100)")
@@ -1659,6 +1664,11 @@ async def research_stream_endpoint(
     institution: Optional[str] = Query(None, description="Optional institution filter (used by topic/custom modes)"),
     university: Optional[str] = Query(None, description="Optional university filter (alias for institution)"),
     country: Optional[str] = Query(None, description="Optional country filter (e.g. 'Canada', 'USA', 'CA', 'US')"),
+    year_start: Optional[int] = Query(None, description="Optional start publication year"),
+    year_end: Optional[int] = Query(None, description="Optional end publication year"),
+    year: Optional[int] = Query(None, description="Optional exact publication year"),
+    source: Optional[str] = Query(None, description="Optional source filter ('arxiv', 'scholar', 'openalex')"),
+    pdf_only: Optional[bool] = Query(None, description="Optional filter to papers with direct PDF links"),
     orcarouter_key: Optional[str] = Query(None, description="Optional override OrcaRouter API key"),
     semantic_scholar_key: Optional[str] = Query(None, description="Optional override Semantic Scholar API key")
 ):
@@ -1770,8 +1780,10 @@ async def research_stream_endpoint(
 
             # Topic / Custom Combined Exploration Pipeline (multi-field query builder)
             # 'topic' = standalone topic; 'custom' = topic + author + institution combined.
-            cache_key = f"{clean_query}|author:{clean_author or ''}|inst:{clean_institution or ''}|country:{clean_country or ''}|k:{limit}"
-            has_active_filters = bool(clean_author or clean_institution or clean_country)
+            clean_source = (source or "").strip().lower() or None
+            clean_pdf = bool(pdf_only)
+            has_active_filters = bool(clean_author or clean_institution or clean_country or year_start is not None or year_end is not None or year is not None or (clean_source and clean_source != "all") or clean_pdf)
+            cache_key = f"{clean_query}|author:{clean_author or ''}|inst:{clean_institution or ''}|country:{clean_country or ''}|ys:{year_start or ''}|ye:{year_end or ''}|yr:{year or ''}|src:{clean_source or ''}|pdf:{1 if clean_pdf else 0}|k:{limit}"
             cached_entry = search_cache.get(cache_key)
             if cached_entry is None and not has_active_filters:
                 cached_entry = search_cache.get(clean_query)
@@ -1976,6 +1988,11 @@ async def research_stream_endpoint(
                 institution=clean_institution,
                 country=clean_country,
                 query=keywords,
+                year_start=year_start,
+                year_end=year_end,
+                year=year,
+                source=clean_source,
+                pdf_only=clean_pdf,
             )
             metadata["final_count"] = len(final_papers)
 
@@ -2000,6 +2017,16 @@ async def research_stream_endpoint(
             country_bullet = f"- **Country Filter**: Filtered to research affiliated with **{clean_country}**\n" if clean_country else ""
             inst_bullet = f"- **University / Lab Filter**: Filtered to research affiliated with **{clean_institution}**\n" if clean_institution else ""
             author_bullet = f"- **Author Filter**: Filtered to publications authored by **{clean_author}**\n" if clean_author else ""
+            if year:
+                year_bullet = f"- **Publication Year Filter**: Filtered to **{year}**\n"
+            elif year_start or year_end:
+                ys_lbl = str(year_start) if year_start else "early"
+                ye_lbl = str(year_end) if year_end else "present"
+                year_bullet = f"- **Publication Year Filter**: Filtered to **{ys_lbl}–{ye_lbl}**\n"
+            else:
+                year_bullet = ""
+            pdf_bullet = "- **PDF Filter**: Filtered to papers with accessible direct PDF links\n" if clean_pdf else ""
+            source_bullet = f"- **Repository Source**: Filtered to **{clean_source}**\n" if (clean_source and clean_source != "all") else ""
 
             if len(final_papers) > 0:
                 overview_summary = (
@@ -2008,6 +2035,9 @@ async def research_stream_endpoint(
                     f"{inst_bullet}"
                     f"{country_bullet}"
                     f"{author_bullet}"
+                    f"{year_bullet}"
+                    f"{source_bullet}"
+                    f"{pdf_bullet}"
                     f"- **Discovered Papers**: **{len(final_papers)}** high-signal papers retrieved and prioritized ({source_breakdown}).\n"
                     f"- **Multi-Source Repositories**: Cross-referenced ArXiv CS, Semantic Scholar, and OpenAlex.\n"
                     f"- **Sidebar Available**: All identified papers are rendered with metadata, citations, open-source code links, and PDF links in the **Discovered Papers** sidebar.\n\n"
@@ -2019,6 +2049,10 @@ async def research_stream_endpoint(
                 if clean_country: active_filter_desc.append(f"Country: {clean_country}")
                 if clean_institution: active_filter_desc.append(f"University: {clean_institution}")
                 if clean_author: active_filter_desc.append(f"Author: {clean_author}")
+                if year: active_filter_desc.append(f"Year: {year}")
+                elif year_start or year_end: active_filter_desc.append(f"Years: {year_start or 'early'}–{year_end or 'present'}")
+                if clean_source and clean_source != "all": active_filter_desc.append(f"Source: {clean_source}")
+                if clean_pdf: active_filter_desc.append("PDF: direct only")
                 filter_str = ", ".join(active_filter_desc) if active_filter_desc else "active constraints"
                 oa_notice = ""
                 if metadata.get("openalex_status") in ("rate_limited", "timed_out"):

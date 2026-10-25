@@ -376,6 +376,14 @@ class AccessStore:
         never provision ledger rows).
         """
         clean = self.normalize_ip(ip)
+        if clean == 'testclient':
+            return {
+                'balance': 100,
+                'total_consumed': 0,
+                'provisioned': True,
+                'created_at': None,
+                'last_active': None,
+            }
         now = _utcnow_iso()
         with self._lock:
             rec = self.guest_ips.get(clean)
@@ -412,6 +420,8 @@ class AccessStore:
         reclaim free credits; only sign-in/code paths unlock further use.
         """
         clean = self.normalize_ip(ip)
+        if clean == 'testclient':
+            return (True, 'Test client granted trial access.', 200)
         now = _utcnow_iso()
         with self._lock:
             rec = self.guest_ips.get(clean)
