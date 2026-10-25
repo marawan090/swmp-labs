@@ -1897,6 +1897,7 @@ async def research_stream_endpoint(
                 "arxiv_status": "pending",
                 "ss_status": "pending",
                 "openalex_status": "pending",
+                "provider_statuses": {},
                 "errors": [],
                 "cache_hit": False,
             }
@@ -1904,14 +1905,17 @@ async def research_stream_endpoint(
             fetch_quota = min(max(limit, 10), 100)
             client = get_shared_http_client()
 
+            arxiv_status_tracker: Dict[str, Any] = {}
+            ss_status_tracker: Dict[str, Any] = {}
             openalex_status_tracker: Dict[str, Any] = {}
-            arxiv_task = fetch_arxiv_papers(keywords, client, max_results=fetch_quota, author=clean_author, country=clean_country)
+            arxiv_task = fetch_arxiv_papers(keywords, client, max_results=fetch_quota, author=clean_author, country=clean_country, status_tracker=arxiv_status_tracker)
             ss_task = fetch_semantic_scholar_papers(
                 keywords,
                 client,
                 api_key=effective_ss_key or None,
                 limit=fetch_quota,
-                country=clean_country
+                country=clean_country,
+                status_tracker=ss_status_tracker
             )
             openalex_task = fetch_openalex_papers(
                 keywords,
@@ -1930,45 +1934,56 @@ async def research_stream_endpoint(
             if isinstance(results[0], Exception):
                 err = f"ArXiv error: {str(results[0])}"
                 metadata["errors"].append(err)
-                metadata["arxiv_status"] = "failed"
+                metadata["arxiv_status"] = "provider_error"
             else:
                 arxiv_papers = results[0]
                 metadata["arxiv_count"] = len(arxiv_papers)
-                metadata["arxiv_status"] = "success" if arxiv_papers else "empty"
+                metadata["arxiv_status"] = arxiv_status_tracker.get("status") or ("success_with_results" if arxiv_papers else "success_empty")
+                if arxiv_status_tracker.get("error"):
+                    metadata["errors"].append(arxiv_status_tracker["error"])
 
             # Process Semantic Scholar results
             ss_papers: List[Paper] = []
             if isinstance(results[1], Exception):
                 err = f"Semantic Scholar error: {str(results[1])}"
                 metadata["errors"].append(err)
-                metadata["ss_status"] = "failed"
+                metadata["ss_status"] = "provider_error"
             else:
                 ss_papers = results[1]
                 metadata["ss_count"] = len(ss_papers)
-                metadata["ss_status"] = "success" if ss_papers else "empty"
+                metadata["ss_status"] = ss_status_tracker.get("status") or ("success_with_results" if ss_papers else "success_empty")
+                if ss_status_tracker.get("error"):
+                    metadata["errors"].append(ss_status_tracker["error"])
 
             # Process OpenAlex results
             openalex_papers: List[Paper] = []
             if isinstance(results[2], Exception):
                 err = f"OpenAlex error: {str(results[2])}"
                 metadata["errors"].append(err)
-                metadata["openalex_status"] = "failed"
+                metadata["openalex_status"] = "provider_error"
             else:
                 openalex_papers = results[2]
                 metadata["openalex_count"] = len(openalex_papers)
-                oa_reported_status = openalex_status_tracker.get("status")
-                if oa_reported_status in ("rate_limited", "timed_out", "failed"):
-                    metadata["openalex_status"] = oa_reported_status
-                    if openalex_status_tracker.get("error"):
-                        metadata["errors"].append(openalex_status_tracker["error"])
-                else:
-                    metadata["openalex_status"] = "success" if openalex_papers else "empty"
+                metadata["openalex_status"] = openalex_status_tracker.get("status") or ("success_with_results" if openalex_papers else "success_empty")
+                if openalex_status_tracker.get("error"):
+                    metadata["errors"].append(openalex_status_tracker["error"])
 
-            if metadata["openalex_status"] in ("rate_limited", "timed_out"):
+            metadata["provider_statuses"] = {
+                "arxiv": metadata["arxiv_status"],
+                "semantic_scholar": metadata["ss_status"],
+                "openalex": metadata["openalex_status"],
+            }
+
+            degraded_notices = []
+            for p_name, p_st in [("ArXiv", metadata["arxiv_status"]), ("Semantic Scholar", metadata["ss_status"]), ("OpenAlex", metadata["openalex_status"])]:
+                if p_st in ("rate_limited", "timeout", "network_error", "provider_error"):
+                    degraded_notices.append(f"{p_name}: {p_st.replace('_', ' ')}")
+
+            if degraded_notices:
                 yield sse_event({
                     "type": "status",
-                    "stage": "openalex_notice",
-                    "message": f"OpenAlex index notice: {metadata['openalex_status'].replace('_', ' ').title()}. Cross-source enrichment active for candidate papers."
+                    "stage": "provider_notice",
+                    "message": f"Provider notice ({', '.join(degraded_notices)}). Preserving all valid candidates from healthy sources."
                 })
                 await asyncio.sleep(0.04)
 
@@ -2013,7 +2028,7 @@ async def research_stream_endpoint(
             # Stage 5: Search Overview Summary
             yield sse_event({"type": "status", "stage": "discovery_ready", "message": "Literature discovery complete. Ready for on-demand analysis."})
 
-            source_breakdown = f"ArXiv: {metadata['arxiv_count']} | Semantic Scholar: {metadata['ss_count']} | OpenAlex: {metadata['openalex_count']}"
+            source_breakdown = f"ArXiv: {metadata['arxiv_count']} ({metadata['arxiv_status']}) | Semantic Scholar: {metadata['ss_count']} ({metadata['ss_status']}) | OpenAlex: {metadata['openalex_count']} ({metadata['openalex_status']})"
             country_bullet = f"- **Country Filter**: Filtered to research affiliated with **{clean_country}**\n" if clean_country else ""
             inst_bullet = f"- **University / Lab Filter**: Filtered to research affiliated with **{clean_institution}**\n" if clean_institution else ""
             author_bullet = f"- **Author Filter**: Filtered to publications authored by **{clean_author}**\n" if clean_author else ""
@@ -2028,6 +2043,10 @@ async def research_stream_endpoint(
             pdf_bullet = "- **PDF Filter**: Filtered to papers with accessible direct PDF links\n" if clean_pdf else ""
             source_bullet = f"- **Repository Source**: Filtered to **{clean_source}**\n" if (clean_source and clean_source != "all") else ""
 
+            prov_notice = ""
+            if degraded_notices:
+                prov_notice = f"\n\n> [!WARNING]\n> **External Provider Notice**: {', '.join(degraded_notices)}. Candidate papers from healthy endpoints were cross-checked and preserved."
+
             if len(final_papers) > 0:
                 overview_summary = (
                     f"### Literature Discovery Overview\n\n"
@@ -2040,7 +2059,7 @@ async def research_stream_endpoint(
                     f"{pdf_bullet}"
                     f"- **Discovered Papers**: **{len(final_papers)}** high-signal papers retrieved and prioritized ({source_breakdown}).\n"
                     f"- **Multi-Source Repositories**: Cross-referenced ArXiv CS, Semantic Scholar, and OpenAlex.\n"
-                    f"- **Sidebar Available**: All identified papers are rendered with metadata, citations, open-source code links, and PDF links in the **Discovered Papers** sidebar.\n\n"
+                    f"- **Sidebar Available**: All identified papers are rendered with metadata, citations, open-source code links, and PDF links in the **Discovered Papers** sidebar.{prov_notice}\n\n"
                     f"> [!TIP]\n"
                     f"> Click **'Explain Paper with AI'** on any paper card in the sidebar to generate a focused, on-demand breakdown covering its problem statement, technical approach, research gaps, and proposed thesis extensions."
                 )
@@ -2054,9 +2073,6 @@ async def research_stream_endpoint(
                 if clean_source and clean_source != "all": active_filter_desc.append(f"Source: {clean_source}")
                 if clean_pdf: active_filter_desc.append("PDF: direct only")
                 filter_str = ", ".join(active_filter_desc) if active_filter_desc else "active constraints"
-                oa_notice = ""
-                if metadata.get("openalex_status") in ("rate_limited", "timed_out"):
-                    oa_notice = f"\n\n> [!WARNING]\n> **External Index Notice**: The OpenAlex academic index encountered a temporary {metadata['openalex_status'].replace('_', ' ')} during this search. Candidate papers from ArXiv and Semantic Scholar were cross-checked for verified affiliations."
 
                 overview_summary = (
                     f"### Literature Discovery Overview\n\n"
@@ -2066,7 +2082,7 @@ async def research_stream_endpoint(
                     f"{author_bullet}"
                     f"- **Discovered Papers**: **0** papers matched all strict constraints ({source_breakdown}).\n\n"
                     f"> [!NOTE]\n"
-                    f"> None of the candidate papers from the queried repositories satisfied the strict **{filter_str}** requirement. Try broadening your keywords or removing the constraint to explore all matching literature.{oa_notice}"
+                    f"> None of the candidate papers from the queried repositories satisfied the strict **{filter_str}** requirement. Try broadening your keywords or removing the constraint to explore all matching literature.{prov_notice}"
                 )
             yield sse_event({"type": "token", "content": overview_summary})
 

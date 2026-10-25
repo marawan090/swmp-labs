@@ -1476,7 +1476,8 @@ async def fetch_arxiv_papers(
     timeout: float = 12.0,
     author: Optional[str] = None,
     categories: Optional[List[str]] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    status_tracker: Optional[Dict[str, Any]] = None
 ) -> List[Paper]:
     """
     Fetch papers from ArXiv API filtered to CS categories or custom categories.
@@ -1491,6 +1492,8 @@ async def fetch_arxiv_papers(
     intent = (keywords or "").strip()
 
     if not intent and not (author or "").strip():
+        if status_tracker is not None:
+            status_tracker["status"] = "success_empty"
         return papers
 
     # Determine category clause
@@ -1554,24 +1557,62 @@ async def fetch_arxiv_papers(
             "sortBy": "relevance",
             "sortOrder": "descending",
         }
-        async with arxiv_limiter:
-            response = await client.get(
-                ARXIV_API_URL,
-                params=params,
-                timeout=timeout,
-                follow_redirects=True,
-                headers={"User-Agent": REQUEST_USER_AGENT}
-            )
+        try:
+            async with arxiv_limiter:
+                response = await client.get(
+                    ARXIV_API_URL,
+                    params=params,
+                    timeout=timeout,
+                    follow_redirects=True,
+                    headers={"User-Agent": REQUEST_USER_AGENT}
+                )
+        except httpx.TimeoutException:
+            logger.warning("ArXiv request timed out for %r after %.1fs", query_str, timeout)
+            if status_tracker is not None:
+                status_tracker["status"] = "timeout"
+                status_tracker["error"] = f"ArXiv timed out after {timeout:.1f}s"
+            return []
+        except (httpx.ConnectError, httpx.NetworkError) as e:
+            logger.warning("ArXiv network error: %s", str(e))
+            if status_tracker is not None:
+                status_tracker["status"] = "network_error"
+                status_tracker["error"] = f"ArXiv network error: {str(e)}"
+            return []
+        except Exception as e:
+            logger.warning("ArXiv request exception: %s", str(e))
+            if status_tracker is not None:
+                status_tracker["status"] = "provider_error"
+                status_tracker["error"] = f"ArXiv error: {str(e)}"
+            return []
+
+        if response.status_code == 429:
+            logger.warning("ArXiv API rate limited (HTTP 429)")
+            if status_tracker is not None:
+                status_tracker["status"] = "rate_limited"
+                status_tracker["error"] = "ArXiv API rate limit (HTTP 429)"
+            return []
+
         if response.status_code != 200:
             logger.warning("ArXiv API returned status %d: %s", response.status_code, response.text[:200])
+            if status_tracker is not None:
+                status_tracker["status"] = "provider_error"
+                status_tracker["error"] = f"ArXiv HTTP {response.status_code}"
             return []
-        parsed = xmltodict.parse(response.text)
-        entries_data = parsed.get("feed", {}).get("entry", [])
-        if isinstance(entries_data, dict):
-            return [entries_data]
-        elif isinstance(entries_data, list):
-            return entries_data
-        return []
+
+        try:
+            parsed = xmltodict.parse(response.text)
+            entries_data = parsed.get("feed", {}).get("entry", [])
+            if isinstance(entries_data, dict):
+                return [entries_data]
+            elif isinstance(entries_data, list):
+                return entries_data
+            return []
+        except Exception as e:
+            logger.warning("ArXiv XML parse error: %s", str(e))
+            if status_tracker is not None:
+                status_tracker["status"] = "provider_error"
+                status_tracker["error"] = f"ArXiv XML parse error: {str(e)}"
+            return []
 
     try:
         entries = await _execute_arxiv_query(search_query)
@@ -1688,8 +1729,14 @@ async def fetch_arxiv_papers(
                 )
             )
 
+        if status_tracker is not None and "status" not in status_tracker:
+            status_tracker["status"] = "success_with_results" if papers else "success_empty"
+
     except Exception as e:
         logger.error("Error during ArXiv fetch: %s", str(e), exc_info=True)
+        if status_tracker is not None and "status" not in status_tracker:
+            status_tracker["status"] = "provider_error"
+            status_tracker["error"] = f"ArXiv error: {str(e)}"
 
     return papers
 
@@ -1701,6 +1748,7 @@ async def fetch_semantic_scholar_papers(
     limit: int = 10,
     timeout: float = 12.0,
     country: Optional[str] = None,
+    status_tracker: Optional[Dict[str, Any]] = None,
     **kwargs: Any
 ) -> List[Paper]:
     """
@@ -1720,6 +1768,8 @@ async def fetch_semantic_scholar_papers(
     # Custom-search hardening: empty topic => skip API call (avoids ?query= 400s).
     # Standalone flows always pass non-empty keywords, so this is a no-op for them.
     if not (keywords or "").strip():
+        if status_tracker is not None:
+            status_tracker["status"] = "success_empty"
         return papers
 
     headers = {
@@ -1784,9 +1834,21 @@ async def fetch_semantic_scholar_papers(
                         )
                 except httpx.TimeoutException:
                     logger.warning("Semantic Scholar request timed out for %r.", current_query)
+                    if status_tracker is not None:
+                        status_tracker["status"] = "timeout"
+                        status_tracker["error"] = f"Semantic Scholar timed out after {timeout:.1f}s"
+                    break
+                except (httpx.ConnectError, httpx.NetworkError) as e:
+                    logger.warning("Semantic Scholar network error: %s", str(e))
+                    if status_tracker is not None:
+                        status_tracker["status"] = "network_error"
+                        status_tracker["error"] = f"Semantic Scholar network error: {str(e)}"
                     break
                 except Exception as e:
-                    logger.warning("Semantic Scholar network error: %s", str(e))
+                    logger.warning("Semantic Scholar unexpected error: %s", str(e))
+                    if status_tracker is not None:
+                        status_tracker["status"] = "provider_error"
+                        status_tracker["error"] = f"Semantic Scholar error: {str(e)}"
                     break
 
                 if response is not None and response.status_code == 429:
@@ -1805,6 +1867,9 @@ async def fetch_semantic_scholar_papers(
                             "Semantic Scholar API 429 persists after %d retries. Silently falling back to ArXiv results.",
                             max_retries,
                         )
+                        if status_tracker is not None:
+                            status_tracker["status"] = "rate_limited"
+                            status_tracker["error"] = "Semantic Scholar rate limit (HTTP 429)"
                         return papers
 
                 # Not 429: break the retry loop
@@ -1819,6 +1884,13 @@ async def fetch_semantic_scholar_papers(
                     response.status_code,
                     response.text[:200]
                 )
+                if status_tracker is not None:
+                    if response.status_code == 429:
+                        status_tracker["status"] = "rate_limited"
+                        status_tracker["error"] = "Semantic Scholar rate limit (HTTP 429)"
+                    else:
+                        status_tracker["status"] = "provider_error"
+                        status_tracker["error"] = f"Semantic Scholar HTTP {response.status_code}"
                 return papers
 
             data = response.json()
@@ -1906,10 +1978,19 @@ async def fetch_semantic_scholar_papers(
                 )
             )
 
+        if status_tracker is not None and "status" not in status_tracker:
+            status_tracker["status"] = "success_with_results" if papers else "success_empty"
+
     except httpx.TimeoutException:
         logger.warning("Semantic Scholar request timed out after %.1fs. Gracefully continuing with ArXiv results.", timeout)
+        if status_tracker is not None and "status" not in status_tracker:
+            status_tracker["status"] = "timeout"
+            status_tracker["error"] = f"Semantic Scholar timed out after {timeout:.1f}s"
     except Exception as e:
         logger.warning("Error during Semantic Scholar fetch: %s. Gracefully continuing with ArXiv results.", str(e))
+        if status_tracker is not None and "status" not in status_tracker:
+            status_tracker["status"] = "provider_error"
+            status_tracker["error"] = f"Semantic Scholar error: {str(e)}"
 
     return papers
 
@@ -2216,6 +2297,8 @@ async def fetch_openalex_papers(
             filter_parts.append(f"raw_affiliation_strings.search:{quote_plus(c_name or country.strip())}")
 
     if not clean_kw and len(filter_parts) == 1:
+        if status_tracker is not None:
+            status_tracker["status"] = "success_empty"
         return papers
 
     params = _openalex_params({
@@ -2254,13 +2337,19 @@ async def fetch_openalex_papers(
                 continue
             logger.warning("OpenAlex request timed out after %.1fs.", timeout)
             if status_tracker is not None:
-                status_tracker["status"] = "timed_out"
+                status_tracker["status"] = "timeout"
                 status_tracker["error"] = f"OpenAlex timed out after {timeout:.1f}s"
+            return papers
+        except (httpx.ConnectError, httpx.NetworkError) as e:
+            logger.warning("OpenAlex network error: %s", str(e))
+            if status_tracker is not None:
+                status_tracker["status"] = "network_error"
+                status_tracker["error"] = f"OpenAlex network error: {str(e)}"
             return papers
         except Exception as e:
             logger.warning("Error during OpenAlex fetch: %s", str(e))
             if status_tracker is not None:
-                status_tracker["status"] = "failed"
+                status_tracker["status"] = "provider_error"
                 status_tracker["error"] = f"OpenAlex error: {str(e)}"
             return papers
 
@@ -2271,7 +2360,7 @@ async def fetch_openalex_papers(
                 status_tracker["status"] = "rate_limited"
                 status_tracker["error"] = "OpenAlex API rate limit (HTTP 429)"
             else:
-                status_tracker["status"] = "failed"
+                status_tracker["status"] = "provider_error"
                 status_tracker["error"] = f"OpenAlex HTTP {response.status_code if response else 'No response'}"
         return papers
 
@@ -2294,7 +2383,7 @@ async def fetch_openalex_papers(
                 logger.warning("OpenAlex relaxed fallback query failed: %s", str(fb_err))
 
     if status_tracker is not None:
-        status_tracker["status"] = "success" if items else "empty"
+        status_tracker["status"] = "success_with_results" if items else "success_empty"
 
     for item in items:
         title = (item.get("title") or "").strip()
@@ -3091,12 +3180,17 @@ async def search_academic_papers(
         "arxiv_status": "pending",
         "ss_status": "pending",
         "openalex_status": "pending",
+        "provider_statuses": {},
         "errors": [],
         "cache_hit": False,
     }
 
     target_fetch_count = min(max(top_k, 10), 100)
     http_client = client or get_shared_http_client()
+
+    arxiv_status_tracker: Dict[str, Any] = {}
+    ss_status_tracker: Dict[str, Any] = {}
+    openalex_status_tracker: Dict[str, Any] = {}
 
     # Run ArXiv, Semantic Scholar, and OpenAlex in parallel with return_exceptions=True
     arxiv_task = fetch_arxiv_papers(
@@ -3105,14 +3199,16 @@ async def search_academic_papers(
         max_results=target_fetch_count,
         author=author,
         categories=categories,
-        country=country
+        country=country,
+        status_tracker=arxiv_status_tracker
     )
     ss_task = fetch_semantic_scholar_papers(
         keywords,
         http_client,
         api_key=effective_ss_key or None,
         limit=target_fetch_count,
-        country=country
+        country=country,
+        status_tracker=ss_status_tracker
     )
     openalex_task = fetch_openalex_papers(
         keywords,
@@ -3120,7 +3216,8 @@ async def search_academic_papers(
         limit=target_fetch_count,
         author=author,
         institution=effective_inst,
-        country=effective_country
+        country=effective_country,
+        status_tracker=openalex_status_tracker
     )
 
     results = await asyncio.gather(arxiv_task, ss_task, openalex_task, return_exceptions=True)
@@ -3131,11 +3228,13 @@ async def search_academic_papers(
         err = f"ArXiv error: {str(results[0])}"
         logger.warning(err)
         metadata["errors"].append(err)
-        metadata["arxiv_status"] = "failed"
+        metadata["arxiv_status"] = "provider_error"
     else:
         arxiv_papers = results[0]
         metadata["arxiv_count"] = len(arxiv_papers)
-        metadata["arxiv_status"] = "success" if arxiv_papers else "empty"
+        metadata["arxiv_status"] = arxiv_status_tracker.get("status") or ("success_with_results" if arxiv_papers else "success_empty")
+        if arxiv_status_tracker.get("error"):
+            metadata["errors"].append(arxiv_status_tracker["error"])
 
     # Handle Semantic Scholar result
     ss_papers: List[Paper] = []
@@ -3143,11 +3242,13 @@ async def search_academic_papers(
         err = f"Semantic Scholar error: {str(results[1])}"
         logger.warning(err)
         metadata["errors"].append(err)
-        metadata["ss_status"] = "failed"
+        metadata["ss_status"] = "provider_error"
     else:
         ss_papers = results[1]
         metadata["ss_count"] = len(ss_papers)
-        metadata["ss_status"] = "success" if ss_papers else "empty"
+        metadata["ss_status"] = ss_status_tracker.get("status") or ("success_with_results" if ss_papers else "success_empty")
+        if ss_status_tracker.get("error"):
+            metadata["errors"].append(ss_status_tracker["error"])
 
     # Handle OpenAlex result
     openalex_papers: List[Paper] = []
@@ -3155,11 +3256,19 @@ async def search_academic_papers(
         err = f"OpenAlex error: {str(results[2])}"
         logger.warning(err)
         metadata["errors"].append(err)
-        metadata["openalex_status"] = "failed"
+        metadata["openalex_status"] = "provider_error"
     else:
         openalex_papers = results[2]
         metadata["openalex_count"] = len(openalex_papers)
-        metadata["openalex_status"] = "success" if openalex_papers else "empty"
+        metadata["openalex_status"] = openalex_status_tracker.get("status") or ("success_with_results" if openalex_papers else "success_empty")
+        if openalex_status_tracker.get("error"):
+            metadata["errors"].append(openalex_status_tracker["error"])
+
+    metadata["provider_statuses"] = {
+        "arxiv": metadata["arxiv_status"],
+        "semantic_scholar": metadata["ss_status"],
+        "openalex": metadata["openalex_status"],
+    }
 
     # Cross-source affiliation enrichment & code discovery for candidates
     all_candidates = arxiv_papers + ss_papers + openalex_papers
